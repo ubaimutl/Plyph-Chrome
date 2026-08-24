@@ -1,0 +1,9 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+web-ext-artifacts/
+*.zip
+
+# AMO submission files (private)
+amo/
