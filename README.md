@@ -1,4 +1,4 @@
-# PromptPaste for Chrome
+# Plyph for Chrome
 
 Use AI on selected text in Chrome. Correct writing, rewrite text, run a selection as a prompt, or create custom actions. Results can be reviewed and edited before replacing the original selection.
 
@@ -12,8 +12,8 @@ Use AI on selected text in Chrome. Correct writing, rewrite text, run a selectio
 2. Open `chrome://extensions`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the PromptPaste extension directory.
-6. Open PromptPaste settings, choose a provider, and add your API key or Ollama URL.
+5. Select the Plyph extension directory.
+6. Open Plyph settings, choose a provider, and add your API key or Ollama URL.
 
 ## Features
 
@@ -31,7 +31,7 @@ Use AI on selected text in Chrome. Correct writing, rewrite text, run a selectio
 
 Select text on a normal web page, then use the toolbar button, context menu, floating action menu, or keyboard shortcut.
 
-PromptPaste can show a small action dot beside selected text. Click it to open the action menu, or right-click selected text and open the **PromptPaste** submenu.
+Plyph can show a small action dot beside selected text. Click it to open the action menu, or right-click selected text and open the **Plyph** submenu.
 
 The floating action dot can be disabled under **Settings → General → Page controls**.
 
