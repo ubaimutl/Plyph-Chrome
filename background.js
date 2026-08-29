@@ -53,7 +53,7 @@ async function setupToolbarIconDocument() {
     });
   } catch (error) {
     console.warn(
-      "PromptPaste could not create the offscreen icon document:",
+      "Plyph could not create the offscreen icon document:",
       error,
     );
   }
@@ -131,7 +131,7 @@ async function setupOllamaOriginRewrite() {
       addRules: OLLAMA_DNR_RULES,
     });
   } catch (error) {
-    console.warn("PromptPaste could not install the Ollama origin fix:", error);
+    console.warn("Plyph could not install the Ollama origin fix:", error);
   }
 }
 setupOllamaOriginRewrite();
@@ -140,7 +140,7 @@ let menuBuild = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener(() => {
   initializeExtension().catch((error) => {
-    console.error("Could not initialize PromptPaste:", error);
+    console.error("Could not initialize Plyph:", error);
   });
 });
 
@@ -183,9 +183,9 @@ async function removeLegacyPageControls() {
         chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: () => {
-            document.getElementById("promptpaste-trigger")?.remove();
-            document.getElementById("promptpaste-host")?.remove();
-            document.getElementById("promptpaste-toast")?.remove();
+            document.getElementById("plyph-trigger")?.remove();
+            document.getElementById("plyph-host")?.remove();
+            document.getElementById("plyph-toast")?.remove();
           },
         }),
       ),
@@ -229,7 +229,7 @@ function scheduleMenuRebuild() {
   menuBuild = menuBuild
     .then(rebuildMenus)
     .catch((error) =>
-      console.error("Could not rebuild PromptPaste menus:", error),
+      console.error("Could not rebuild Plyph menus:", error),
     );
   return menuBuild;
 }
@@ -237,25 +237,25 @@ function scheduleMenuRebuild() {
 async function rebuildMenus() {
   await chrome.contextMenus.removeAll();
   chrome.contextMenus.create({
-    id: "promptpaste-root",
-    title: "PromptPaste",
+    id: "plyph-root",
+    title: "Plyph",
     contexts: ["selection", "editable"],
   });
   chrome.contextMenus.create({
     id: "correct",
-    parentId: "promptpaste-root",
+    parentId: "plyph-root",
     title: "Correct selected text",
     contexts: ["selection", "editable"],
   });
   chrome.contextMenus.create({
     id: "rewrite",
-    parentId: "promptpaste-root",
+    parentId: "plyph-root",
     title: "Rewrite selected text",
     contexts: ["selection", "editable"],
   });
   chrome.contextMenus.create({
     id: "prompt",
-    parentId: "promptpaste-root",
+    parentId: "plyph-root",
     title: "Run selected prompt",
     contexts: ["selection", "editable"],
   });
@@ -263,7 +263,7 @@ async function rebuildMenus() {
   for (const action of enabledActions(settings)) {
     chrome.contextMenus.create({
       id: `custom:${action.id}`,
-      parentId: "promptpaste-root",
+      parentId: "plyph-root",
       title: action.name,
       contexts: ["selection", "editable"],
     });
@@ -271,7 +271,7 @@ async function rebuildMenus() {
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "promptpaste-root") return;
+  if (info.menuItemId === "plyph-root") return;
   const action = info.menuItemId.startsWith("custom:")
     ? { mode: "custom", actionId: info.menuItemId.slice(7) }
     : { mode: info.menuItemId };
@@ -282,7 +282,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 chrome.commands.onCommand.addListener((command) => {
   runCommand(command).catch((error) =>
-    console.error("Could not run PromptPaste command:", error),
+    console.error("Could not run Plyph command:", error),
   );
 });
 
@@ -373,7 +373,7 @@ async function runOnTab(tabId, actionRequest, fallbackText = "") {
       model,
     });
   } catch (error) {
-    console.error("Could not save PromptPaste history:", error);
+    console.error("Could not save Plyph history:", error);
   }
   await chrome.tabs.sendMessage(tabId, {
     type: settings.previewResults ? "SHOW_RESULT" : "REPLACE_RESULT",
@@ -650,7 +650,7 @@ async function transform(text, action, settings) {
     urls[provider],
     {
       Authorization: `Bearer ${key}`,
-      ...(provider === "openrouter" ? { "X-Title": "PromptPaste" } : {}),
+      ...(provider === "openrouter" ? { "X-Title": "Plyph" } : {}),
     },
     body,
     provider,
