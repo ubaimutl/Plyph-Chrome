@@ -3,11 +3,16 @@ import {
   DEFAULT_ACTIONS,
   enabledActions,
   getSettings,
+  resolveOutputFormat,
 } from "./shared.js";
 
 const PROVIDER_NAMES = {
   ollama: "Ollama",
+  custom_openai: "Custom OpenAI-Compatible",
   groq: "Groq",
+  cloudflare: "Cloudflare Workers AI",
+  bai: "B.AI",
+  deepseek: "DeepSeek",
   gemini: "Gemini",
   openrouter: "OpenRouter",
   cerebras: "Cerebras",
@@ -15,50 +20,47 @@ const PROVIDER_NAMES = {
   vercel: "Vercel AI Gateway",
 };
 
-const TOOLBAR_ICON_SETS = {
-  light: {
-    16: "toolbar/for-light-theme/icon16.png",
-    32: "toolbar/for-light-theme/icon32.png",
-  },
-  dark: {
-    16: "toolbar/for-dark-theme/icon16.png",
-    32: "toolbar/for-dark-theme/icon32.png",
-  },
-};
-
-function applyToolbarIcon(dark) {
-  if (!chrome.action?.setIcon) return;
-  try {
-    chrome.action
-      .setIcon({ path: TOOLBAR_ICON_SETS[dark ? "dark" : "light"] })
-      .catch(() => {});
-  } catch {
-    /* The action icon may not be ready yet. */
+async function restrictStorageAccess() {
+  for (const area of [chrome.storage.local, chrome.storage.session]) {
+    if (!area?.setAccessLevel) continue;
+    try {
+      await area.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
+    } catch (error) {
+      console.warn('Plyph could not restrict extension storage access:', error);
+    }
   }
 }
+restrictStorageAccess();
 
-async function setupToolbarIconDocument() {
-  if (!chrome.offscreen?.createDocument) return;
-  try {
-    const existing = await chrome.runtime.getContexts?.({
-      contextTypes: ["OFFSCREEN_DOCUMENT"],
-      documentUrls: [chrome.runtime.getURL("offscreen-icon.html")],
-    });
-    if (existing?.length) return;
-    await chrome.offscreen.createDocument({
-      url: "offscreen-icon.html",
-      reasons: ["MATCH_MEDIA"],
-      justification:
-        "Watch the browser color scheme so the toolbar icon uses the matching glyph.",
-    });
-  } catch (error) {
-    console.warn(
-      "Plyph could not create the offscreen icon document:",
-      error,
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'GET_PAGE_CONFIG') {
+    getPageConfig().then(sendResponse);
+    return true;
+  }
+  if (message.type === "RUN_ACTION") {
+    handleActionRequest(message.tabId, message.action).then((response) =>
+      sendResponse(response),
     );
+    return true;
   }
+  if (message.type === "RUN_ACTION_FROM_PAGE") {
+    const tabId = sender.tab?.id;
+    handleActionRequest(tabId, message.action, message.text || "").then(
+      (response) => sendResponse(response),
+    );
+    return true;
+  }
+  return false;
+});
+
+async function getPageConfig() {
+  const settings = await getSettings();
+  return {
+    customActions: settings.customActions,
+    selectionTrigger: settings.selectionTrigger,
+    feedbackPlacement: settings.feedbackPlacement,
+  };
 }
-setupToolbarIconDocument();
 
 function normaliseOllamaUrl(value) {
   const raw = String(value || "").trim();
@@ -165,6 +167,12 @@ async function initializeExtension() {
   const migration = {};
   if (current.models?.ollama === "qwen3:4b") {
     migration.models = { ...current.models, ollama: DEFAULTS.models.ollama };
+  }
+  if (current.models?.deepseek === "deepseek-chat") {
+    migration.models = { ...(migration.models || current.models), deepseek: DEFAULTS.models.deepseek };
+  }
+  if (current.models?.groq === "openai/gpt-oss-20b") {
+    migration.models = { ...(migration.models || current.models), groq: DEFAULTS.models.groq };
   }
   if (current.apiKeys?.ollama) {
     migration.apiKeys = { ...current.apiKeys };
@@ -298,27 +306,6 @@ async function runCommand(command) {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "REPORT_COLOR_SCHEME") {
-    applyToolbarIcon(message.dark === true);
-    return;
-  }
-  if (message.type === "RUN_ACTION") {
-    handleActionRequest(message.tabId, message.action).then((response) =>
-      sendResponse(response),
-    );
-    return true;
-  }
-  if (message.type === "RUN_ACTION_FROM_PAGE") {
-    const tabId = sender.tab?.id;
-    handleActionRequest(tabId, message.action, message.text || "").then(
-      (response) => sendResponse(response),
-    );
-    return true;
-  }
-  return false;
-});
-
 async function handleActionRequest(tabId, action, fallbackText = "") {
   try {
     await runOnTab(tabId, action, fallbackText);
@@ -443,6 +430,7 @@ function resolveAction(settings, request) {
       ...item,
       mode: "custom",
       inputMode: item.inputMode === "prompt" ? "prompt" : "transform",
+      outputFormat: item.outputFormat || "auto",
     };
   }
   if (request.mode === "prompt")
@@ -451,6 +439,7 @@ function resolveAction(settings, request) {
       mode: "prompt",
       inputMode: "prompt",
       prompt: settings.prompts.prompt,
+      outputFormat: settings.promptOptions?.outputFormat || "auto",
     };
   const mode = request.mode === "rewrite" ? "rewrite" : "correct";
   return {
@@ -461,17 +450,19 @@ function resolveAction(settings, request) {
     model: "",
     inputLimit: 0,
     outputLimit: 0,
+    outputFormat: "auto",
   };
 }
 
 function estimateTokens(text) {
-  return Math.ceil(text.length / 4);
+  return Math.ceil((text || "").length / 4);
 }
 function maxTokens(text, value = 0) {
-  return (
-    positiveInt(value) ||
-    Math.min(2000, Math.max(220, estimateTokens(text) + 180))
-  );
+  const explicit = positiveInt(value);
+  if (explicit) return explicit;
+  // By default, allow generous output headroom (at least 2048 tokens + text tokens)
+  // so reasoning models and expansions are never prematurely cut off.
+  return Math.max(2048, Math.min(8192, estimateTokens(text) * 4 + 1024));
 }
 function positiveInt(value) {
   return Number.isSafeInteger(Number(value)) && Number(value) > 0
@@ -480,6 +471,10 @@ function positiveInt(value) {
 }
 function payload(text) {
   return `Transform only the text inside the tags.\nReturn only the transformed text.\n<text>\n${text}\n</text>`;
+}
+
+function isCloudflareQwenReasoningModel(provider, model) {
+  return provider === "cloudflare" && /^@cf\/qwen\/qwen3(?:[.-]|$)/.test(model || "");
 }
 
 function expandPrompt(prompt, text, variables) {
@@ -520,24 +515,18 @@ async function requestJson(url, headers, body, provider, model) {
     /* handled below */
   }
   if (!response.ok) {
+    const directError = data?.error?.message || data?.error;
+    const errors = Array.isArray(data?.errors)
+      ? data.errors.map(item => item?.message || item).filter(item => typeof item === "string").join(" ")
+      : "";
+    const detail = typeof directError === "string" ? directError : errors;
     if (response.status === 401 || response.status === 403) {
       if (provider === "ollama") {
-        const detail =
-          typeof data?.error?.message === "string"
-            ? data.error.message
-            : typeof data?.error === "string"
-              ? data.error
-              : "";
         const server =
           response.headers.get("server") || response.headers.get("via") || "";
         const isOllamaCors =
           !server && !detail && !response.headers.get("content-type");
         if (isOllamaCors) {
-          // Ollama rejects the extension's chrome-extension:// origin with a 403
-          // unless the Origin header matches its OLLAMA_ORIGINS allow-list.
-          // The extension strips Origin on the way out, so reaching this error
-          // means the rewrite did not apply (stale extension, or a custom
-          // Ollama URL outside 127.0.0.1/localhost).
           throw new Error(
             `Ollama rejected the request with a ${response.status} because of its cross-origin (CORS) check. The extension removes the Origin header automatically for 127.0.0.1 and localhost — reload the extension so this takes effect. If your Ollama runs on another host, add its origin to Ollama's OLLAMA_ORIGINS environment variable (e.g. OLLAMA_ORIGINS=* ) and restart Ollama.`,
           );
@@ -547,22 +536,23 @@ async function requestJson(url, headers, body, provider, model) {
         );
       }
       throw new Error(
-        `${PROVIDER_NAMES[provider]} rejected the API key. Check it in Settings.`,
+        provider === "cloudflare"
+          ? "Cloudflare rejected the API token or Account ID. Check them in Settings."
+          : `${PROVIDER_NAMES[provider]} rejected the API key. Check it in Settings.`,
       );
     }
     if (response.status === 404)
       throw new Error(
-        `${PROVIDER_NAMES[provider]} could not find model “${model}”.`,
+        provider === "cloudflare"
+          ? `Cloudflare could not find the account or model “${model}”.`
+          : `${PROVIDER_NAMES[provider]} could not find model “${model}”.`,
       );
     if (response.status === 429)
       throw new Error(
         `${PROVIDER_NAMES[provider]} rate limit reached. Wait and try again.`,
       );
-    const detail = data?.error?.message || data?.error;
     throw new Error(
-      typeof detail === "string"
-        ? detail
-        : `${PROVIDER_NAMES[provider]} rejected the request (${response.status}).`,
+      detail || `${PROVIDER_NAMES[provider]} rejected the request (${response.status}).`,
     );
   }
   return data;
@@ -577,17 +567,35 @@ async function transform(text, action, settings) {
     );
   const provider = action.provider || settings.provider;
   const model = action.model || settings.models[provider];
+
+  const effectivePrompt = action.inputMode === "prompt"
+    ? `${text} ${action.prompt || ""}`
+    : (action.prompt || "");
+  const formatMode = resolveOutputFormat(action, text, effectivePrompt);
+  let formatInstruction = "";
+  if (formatMode === "text") {
+    formatInstruction = "Output format requirement: Return clean plain text only. Do not use Markdown formatting (no **bold**, *italics*, # headers, backticks, or bullet markers).";
+  } else if (formatMode === "markdown") {
+    formatInstruction = "Output format requirement: Use clean, well-formatted Markdown where appropriate.";
+  } else if (formatMode === "preserve-markdown") {
+    formatInstruction = "Output format requirement: Preserve the input's existing Markdown formatting and structure without unnecessary restructuring.";
+  }
+
   const prompt = expandPrompt(action.prompt, text, settings.variables);
+  const systemPrompt = [prompt.trim(), formatInstruction].filter(Boolean).join("\n\n");
   const userText = action.inputMode === "prompt" ? text : payload(text);
   const messages = [
-    ...(prompt.trim() ? [{ role: "system", content: prompt }] : []),
+    ...(systemPrompt.trim() ? [{ role: "system", content: systemPrompt }] : []),
     { role: "user", content: userText },
   ];
-  const limit = maxTokens(
-    text,
-    positiveInt(action.outputLimit) ||
-      (action.inputMode === "prompt" ? 2000 : 0),
-  );
+  const requestedOutputLimit = positiveInt(action.outputLimit);
+  let limit = maxTokens(text, requestedOutputLimit);
+  const cloudflareReasoningModel = isCloudflareQwenReasoningModel(provider, model);
+  const cloudflareReasoningEnabled =
+    cloudflareReasoningModel && settings.cloudflareReasoningEnabled === true;
+  if (cloudflareReasoningEnabled && !requestedOutputLimit)
+    limit = Math.max(limit, 4096);
+
   let data;
   if (provider === "ollama") {
     const ollamaUrl = normaliseOllamaUrl(settings.ollamaUrl);
@@ -598,7 +606,7 @@ async function transform(text, action, settings) {
       provider,
       model,
     );
-    if (data.done_reason === "length")
+    if (!data.message?.content && data.done_reason === "length")
       throw new Error(
         "Response reached the output limit. Increase the limit or select less text.",
       );
@@ -606,15 +614,21 @@ async function transform(text, action, settings) {
       throw new Error("Ollama returned an empty response.");
     return cleanOutput(data.message.content, action.inputMode);
   }
+  if (settings.vaultLocked)
+    throw new Error('Unlock your encrypted API keys in Plyph Settings.');
   const key = settings.apiKeys[provider];
-  if (!key)
-    throw new Error(`Add a ${PROVIDER_NAMES[provider]} API key in Settings.`);
+  if (!key && !["ollama", "custom_openai"].includes(provider))
+    throw new Error(
+      provider === "cloudflare"
+        ? "Add a Cloudflare Workers AI API token in Settings."
+        : `Add a ${PROVIDER_NAMES[provider]} API key in Settings.`,
+    );
   if (provider === "gemini") {
     const body = {
       contents: [{ role: "user", parts: [{ text: userText }] }],
       generationConfig: { maxOutputTokens: limit },
     };
-    if (prompt.trim()) body.systemInstruction = { parts: [{ text: prompt }] };
+    if (systemPrompt.trim()) body.systemInstruction = { parts: [{ text: systemPrompt }] };
     data = await requestJson(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
       {},
@@ -622,18 +636,40 @@ async function transform(text, action, settings) {
       provider,
       model,
     );
-    if (data.candidates?.[0]?.finishReason === "MAX_TOKENS")
-      throw new Error(
-        "Response reached the output limit. Increase the limit or select less text.",
-      );
     const output = data.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || "")
       .join("");
+    if (!output && data.candidates?.[0]?.finishReason === "MAX_TOKENS")
+      throw new Error(
+        "Response reached the output limit. Increase the limit or select less text.",
+      );
     if (!output) throw new Error("Gemini returned an empty response.");
     return cleanOutput(output, action.inputMode);
   }
+  let cloudflareAccountId = "";
+  if (provider === "cloudflare") {
+    cloudflareAccountId = String(settings.cloudflareAccountId || "").trim();
+    if (!cloudflareAccountId)
+      throw new Error("Add your Cloudflare Account ID in Settings.");
+  }
+  let customOpenAiEndpoint = "";
+  if (provider === "custom_openai") {
+    const rawUrl = String(settings.customOpenAiUrl || "").trim();
+    if (!rawUrl)
+      throw new Error("Enter the Custom OpenAI Base URL in Settings.");
+    const base = rawUrl.replace(/\/+$/, "");
+    customOpenAiEndpoint = base.endsWith("/chat/completions")
+      ? base
+      : `${base}/chat/completions`;
+    if (!model)
+      throw new Error("Enter a model name for Custom OpenAI-Compatible in Settings.");
+  }
   const urls = {
+    custom_openai: customOpenAiEndpoint,
     groq: "https://api.groq.com/openai/v1/chat/completions",
+    cloudflare: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cloudflareAccountId)}/ai/v1/chat/completions`,
+    bai: "https://api.b.ai/v1/chat/completions",
+    deepseek: "https://api.deepseek.com/chat/completions",
     openrouter: "https://openrouter.ai/api/v1/chat/completions",
     cerebras: "https://api.cerebras.ai/v1/chat/completions",
     openai: "https://api.openai.com/v1/chat/completions",
@@ -644,23 +680,31 @@ async function transform(text, action, settings) {
     messages,
     [provider === "cerebras" ? "max_completion_tokens" : "max_tokens"]: limit,
   };
+  if (cloudflareReasoningModel)
+    body.chat_template_kwargs = { enable_thinking: cloudflareReasoningEnabled };
   if (provider === "groq" && model.startsWith("openai/gpt-oss-"))
     Object.assign(body, { reasoning_effort: "low", include_reasoning: false });
   data = await requestJson(
     urls[provider],
     {
-      Authorization: `Bearer ${key}`,
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      ...(provider === "cloudflare" ? { "cf-aig-gateway-id": "default" } : {}),
       ...(provider === "openrouter" ? { "X-Title": "Plyph" } : {}),
     },
     body,
     provider,
     model,
   );
-  if (data.choices?.[0]?.finish_reason === "length")
+  const message = data.choices?.[0]?.message;
+  const output =
+    message?.content ||
+    (!cloudflareReasoningEnabled && cloudflareReasoningModel
+      ? message?.reasoning_content || message?.reasoning
+      : "");
+  if (!output && data.choices?.[0]?.finish_reason === "length")
     throw new Error(
       "Response reached the output limit. Increase the limit or select less text.",
     );
-  const output = data.choices?.[0]?.message?.content;
   if (!output)
     throw new Error(`${PROVIDER_NAMES[provider]} returned an empty response.`);
   return cleanOutput(output, action.inputMode);

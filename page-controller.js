@@ -43,18 +43,14 @@
   }, {signal: lifecycle.signal});
 
   try {
-    chrome.storage.local.get({selectionTrigger: true, customActions: [], feedbackPlacement: 'bottom'}, values => {
-      try {
-        if (chrome.runtime.lastError) return;
-      } catch (error) {
-        if (isContextInvalidation(error)) disposeController();
-        return;
-      }
+    chrome.runtime.sendMessage({type: 'GET_PAGE_CONFIG'}).then(values => {
       if (!extensionAlive) return;
       triggerEnabled = values.selectionTrigger !== false;
       feedbackPlacement = values.feedbackPlacement || 'bottom';
       cachedActions = enabledCustomActions(values.customActions);
       if (triggerEnabled) scheduleTriggerUpdate();
+    }).catch(error => {
+      if (isContextInvalidation(error)) disposeController();
     });
   } catch (error) {
     if (isContextInvalidation(error)) disposeController();
@@ -102,23 +98,6 @@
     if (isContextInvalidation(error)) disposeController();
   }
 
-  // The service worker cannot read the browser's color scheme (no matchMedia
-  // there), so report it from the page context so the toolbar icon can pick the
-  // right glyph. This mirrors Firefox's theme_icons behavior.
-  function reportColorScheme() {
-    if (!extensionAlive || !hasExtensionContext()) return;
-    try {
-      chrome.runtime.sendMessage({
-        type: 'REPORT_COLOR_SCHEME',
-        dark: matchMedia('(prefers-color-scheme: dark)').matches,
-      }).catch(() => {});
-    } catch { /* Extension context may be invalidated. */ }
-  }
-  try {
-    reportColorScheme();
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportColorScheme, {signal: lifecycle.signal});
-  } catch { /* matchMedia should exist in page contexts. */ }
-
   function captureSelection() {
     const active = document.activeElement;
     if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && /^(text|search|url|tel|email|password)$/i.test(active.type))) {
@@ -146,13 +125,37 @@
     snapshot = current;
     const rect = selectionRect(current);
     if (!rect || (!rect.width && !rect.height)) return removeTrigger();
+    if (rect.bottom < -20 || rect.top > window.innerHeight + 20 || rect.right < -20 || rect.left > window.innerWidth + 20) {
+      return removeTrigger();
+    }
     showTrigger(rect);
   }
 
   function selectionRect(selection) {
     if (selection.kind === 'range') {
+      const rects = selection.range.getClientRects();
+      if (rects.length > 0) {
+        const last = rects[rects.length - 1];
+        if (last && (last.width || last.height)) {
+          return {
+            left: last.left,
+            right: last.right,
+            top: last.top,
+            bottom: last.bottom,
+            width: last.width,
+            height: last.height,
+          };
+        }
+      }
       const rect = selection.range.getBoundingClientRect();
-      return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height};
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
     }
     return controlCaretRect(selection.element, selection.end);
   }
@@ -161,69 +164,238 @@
     const style = getComputedStyle(element);
     const mirror = document.createElement('div');
     const properties = [
-      'boxSizing', 'width', 'height', 'borderTopWidth', 'borderRightWidth',
-      'borderBottomWidth', 'borderLeftWidth', 'paddingTop', 'paddingRight',
-      'paddingBottom', 'paddingLeft', 'fontStyle', 'fontVariant', 'fontWeight',
-      'fontStretch', 'fontSize', 'fontFamily', 'lineHeight', 'letterSpacing',
-      'textTransform', 'textAlign', 'textIndent', 'wordSpacing', 'tabSize',
+      'direction', 'boxSizing', 'width', 'overflowX', 'overflowY',
+      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+      'borderTopStyle', 'borderRightStyle', 'borderBottomStyle', 'borderLeftStyle',
+      'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+      'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize',
+      'lineHeight', 'fontFamily', 'textAlign', 'textTransform', 'textIndent',
+      'letterSpacing', 'wordSpacing', 'tabSize', 'whiteSpace', 'wordBreak', 'overflowWrap',
     ];
     Object.assign(mirror.style, {
-      position: 'absolute', visibility: 'hidden', top: '0', left: '-9999px',
-      overflow: 'hidden', whiteSpace: element instanceof HTMLInputElement ? 'pre' : 'pre-wrap',
+      position: 'absolute',
+      visibility: 'hidden',
+      top: '0',
+      left: '-9999px',
+      height: 'auto',
+      whiteSpace: element instanceof HTMLInputElement ? 'pre' : 'pre-wrap',
       overflowWrap: 'break-word',
+      wordBreak: 'break-word',
     });
-    for (const property of properties) mirror.style[property] = style[property];
+    for (const property of properties) {
+      if (style[property]) mirror.style[property] = style[property];
+    }
     mirror.textContent = element.value.slice(0, position);
     const marker = document.createElement('span');
-    marker.textContent = element.value.slice(position) || '.';
+    marker.textContent = '\u200B';
     mirror.append(marker);
     document.body.append(mirror);
+
     const elementRect = element.getBoundingClientRect();
-    const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2;
-    const rect = {
-      left: elementRect.left + marker.offsetLeft - element.scrollLeft,
-      right: elementRect.left + marker.offsetLeft - element.scrollLeft,
-      top: elementRect.top + marker.offsetTop - element.scrollTop,
-      bottom: elementRect.top + marker.offsetTop - element.scrollTop + lineHeight,
+    const markerLeft = marker.offsetLeft;
+    const markerTop = marker.offsetTop;
+    const lineHeight = Number.parseFloat(style.lineHeight) || (Number.parseFloat(style.fontSize) * 1.2) || 16;
+    mirror.remove();
+
+    return {
+      left: elementRect.left + markerLeft - element.scrollLeft,
+      right: elementRect.left + markerLeft - element.scrollLeft,
+      top: elementRect.top + markerTop - element.scrollTop,
+      bottom: elementRect.top + markerTop - element.scrollTop + lineHeight,
       width: 1,
       height: lineHeight,
     };
-    mirror.remove();
-    return rect;
+  }
+
+  function getElementLuminance(element) {
+    let el = element instanceof HTMLElement ? element : (element?.parentElement || document.body);
+    while (el && el !== document.documentElement) {
+      const bg = window.getComputedStyle(el).backgroundColor;
+      if (bg && bg !== 'transparent' && !bg.includes('rgba(0, 0, 0, 0)')) {
+        const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        if (match) {
+          const r = Number(match[1]), g = Number(match[2]), b = Number(match[3]);
+          return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        }
+      }
+      el = el.parentElement;
+    }
+    const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+    const match = bodyBg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match && !bodyBg.includes('rgba(0, 0, 0, 0)')) {
+      return (0.2126 * Number(match[1]) + 0.7152 * Number(match[2]) + 0.0722 * Number(match[3])) / 255;
+    }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 0.1 : 0.9;
   }
 
   function showTrigger(rect) {
     let host = document.getElementById('plyph-trigger');
+    const targetElement = snapshot?.element || (snapshot?.range?.startContainer instanceof HTMLElement ? snapshot?.range?.startContainer : snapshot?.range?.startContainer?.parentElement);
+    const isDark = getElementLuminance(targetElement) < 0.5;
+
     if (!host) {
       host = document.createElement('div');
       host.id = 'plyph-trigger';
       const root = host.attachShadow({mode: 'open'});
       root.innerHTML = `
         <style>
-          :host{all:initial;--surface:#fff;--hover:#f0f1f4;--text:#24262b;--muted:#6d7179;--border:#d9dce2;--accent:#4058cf}
-          @media(prefers-color-scheme:dark){:host{--surface:#292a2e;--hover:#3a3b40;--text:#f1f1f3;--muted:#aaacb2;--border:#45474d;--accent:#9cabff}}
-          .dot{display:flex;align-items:center;justify-content:center;width:23px;height:23px;padding:0;border:1px solid var(--border);border-radius:50%;background:var(--surface);color:var(--accent);box-shadow:0 3px 12px rgba(0,0,0,.24);font:700 13px/1 system-ui,sans-serif;cursor:pointer}
-          .dot:hover,.dot[aria-expanded=true]{background:var(--hover)}
-          .menu{position:absolute;top:28px;right:0;width:220px;padding:5px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.3);display:flex;flex-direction:column}.menu.above{top:auto;bottom:28px}
-          .menu[hidden]{display:none}.item{width:100%;min-height:29px;padding:5px 9px;border:0;border-radius:6px;background:transparent;color:var(--text);font:13.5px/1.35 system-ui,sans-serif;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;display:flex;align-items:center;gap:8px}.item:hover,.item:focus{background:var(--hover);outline:0}
-          .glyph{display:flex;flex:0 0 16px;width:16px;height:16px;color:var(--muted)}.glyph svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.glyph .filled{fill:currentColor;stroke:none}.label{min-width:0;overflow:hidden;text-overflow:ellipsis}
-          .separator{height:1px;margin:4px 8px;background:var(--border)}
+          :host { all: initial; }
+          .wrapper {
+            display: inline-flex;
+            position: relative;
+            font-family: system-ui, -apple-system, sans-serif;
+          }
+          .wrapper.theme-light {
+            --surface: #ffffff;
+            --hover: #f1f3f7;
+            --text: #1f2328;
+            --icon-color: #1a1a1a;
+            --muted: #656d76;
+            --border: #d0d7de;
+            --shadow: 0 3px 10px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
+          }
+          .wrapper.theme-dark {
+            --surface: #21262d;
+            --hover: #30363d;
+            --text: #f0f6fc;
+            --icon-color: #ffffff;
+            --muted: #8b949e;
+            --border: #383e47;
+            --shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.25);
+          }
+          .dot {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+            cursor: pointer;
+            transition: transform 0.12s ease, background 0.12s ease;
+            box-sizing: border-box;
+          }
+          .dot:hover, .dot[aria-expanded="true"] {
+            background: var(--hover);
+            transform: scale(1.06);
+          }
+          .dot:active {
+            transform: scale(0.96);
+          }
+          .dot-icon {
+            display: block;
+            width: 17px;
+            height: 17px;
+            pointer-events: none;
+            user-select: none;
+          }
+          .menu {
+            position: absolute;
+            top: 32px;
+            right: 0;
+            width: 220px;
+            max-width: calc(100vw - 16px);
+            padding: 5px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+            box-sizing: border-box;
+          }
+          .menu.align-left {
+            left: 0;
+            right: auto;
+          }
+          .menu.above {
+            top: auto;
+            bottom: 32px;
+          }
+          .menu[hidden] { display: none; }
+          .item {
+            width: 100%;
+            min-height: 29px;
+            padding: 5px 9px;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            font: 13.5px/1.35 system-ui, -apple-system, sans-serif;
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-sizing: border-box;
+          }
+          .item:hover, .item:focus {
+            background: var(--hover);
+            outline: 0;
+          }
+          .glyph {
+            display: flex;
+            flex: 0 0 16px;
+            width: 16px;
+            height: 16px;
+            color: var(--muted);
+          }
+          .glyph svg {
+            width: 16px;
+            height: 16px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.7;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+          }
+          .glyph .filled { fill: currentColor; stroke: none; }
+          .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .separator { height: 1px; margin: 4px 8px; background: var(--border); }
         </style>
-        <button class="dot" title="Plyph actions" aria-label="Open Plyph actions" aria-expanded="false">✦</button>
-        <div class="menu" role="menu" hidden></div>`;
+        <div class="wrapper ${isDark ? 'theme-dark' : 'theme-light'}">
+          <button class="dot" title="Plyph actions" aria-label="Open Plyph actions" aria-expanded="false">
+            <svg class="dot-icon" viewBox="0 0 1024 1024" role="img" aria-label="Plyph logo">
+              <path d="M 512 156 C 496 257 458 365 401 455 C 349 537 286 607 220 660 C 302 636 368 637 419 675 C 465 709 493 755 512 800 C 531 755 559 709 605 675 C 656 637 722 636 804 660 C 738 607 675 537 623 455 C 566 365 528 257 512 156 Z" fill="var(--icon-color)"/>
+              <path d="M 512 405 C 461 405 424 439 424 487 C 424 539 444 594 468 650 C 490 702 505 751 512 800 C 509 757 507 714 511 678 C 516 635 532 612 559 586 C 589 557 600 527 600 488 C 600 440 563 405 512 405 Z" fill="var(--surface)"/>
+              <circle cx="512" cy="493" r="37" fill="var(--icon-color)"/>
+            </svg>
+          </button>
+          <div class="menu" role="menu" hidden></div>
+        </div>`;
       document.documentElement.append(host);
       const dot = root.querySelector('.dot');
       dot.addEventListener('mousedown', event => event.preventDefault());
       dot.addEventListener('click', () => toggleTriggerMenu(root));
       root.addEventListener('keydown', event => { if (event.key === 'Escape') removeTrigger(); });
+    } else {
+      const wrapper = host.shadowRoot.querySelector('.wrapper');
+      if (wrapper) {
+        wrapper.className = `wrapper ${isDark ? 'theme-dark' : 'theme-light'}`;
+      }
     }
-    const x = Math.min(window.innerWidth - 29, Math.max(6, rect.right + 5));
-    const y = Math.min(window.innerHeight - 29, Math.max(6, rect.bottom + 5));
+    const x = Math.min(window.innerWidth - 32, Math.max(6, rect.right + 5));
+    const y = Math.min(window.innerHeight - 32, Math.max(6, rect.bottom + 5));
     host.style.setProperty('position', 'fixed', 'important');
     host.style.setProperty('z-index', '2147483646', 'important');
     host.style.setProperty('left', `${x}px`, 'important');
     host.style.setProperty('top', `${y}px`, 'important');
-    host.shadowRoot.querySelector('.menu').classList.toggle('above', y > window.innerHeight - 250);
+    updateMenuPosition(host.shadowRoot?.querySelector('.menu'), x, y);
+  }
+
+  function updateMenuPosition(menu, x, y) {
+    if (!menu) return;
+    const MENU_WIDTH = 220;
+    const MENU_HEIGHT = 260;
+    menu.classList.toggle('align-left', x < MENU_WIDTH);
+    menu.classList.toggle('above', y > window.innerHeight - MENU_HEIGHT);
   }
 
   function enabledCustomActions(actions) {
@@ -245,6 +417,10 @@
     const menu = root.querySelector('.menu');
     const dot = root.querySelector('.dot');
     if (!menu.hidden) { menu.hidden = true; dot.setAttribute('aria-expanded', 'false'); return; }
+    const host = document.getElementById('plyph-trigger');
+    const x = parseFloat(host?.style.left) || 0;
+    const y = parseFloat(host?.style.top) || 0;
+    updateMenuPosition(menu, x, y);
     const actions = [
       {name: 'Correct selected text', mode: 'correct'},
       {name: 'Rewrite selected text', mode: 'rewrite'},
@@ -341,38 +517,372 @@
     const host = document.createElement('div');
     host.id = 'plyph-host';
     const root = host.attachShadow({mode: 'open'});
+
     root.innerHTML = `
       <style>
-        :host{all:initial;--pp-surface:#fff;--pp-text:#172033;--pp-muted:#667085;--pp-field:#fbfcfe;--pp-border:#d7dce5;--pp-button:#fff;--pp-primary:#3f5bd8}
-        @media(prefers-color-scheme:dark){:host{--pp-surface:#242529;--pp-text:#f1f1f3;--pp-muted:#a7a9b0;--pp-field:#191a1d;--pp-border:#414349;--pp-button:#303136;--pp-primary:#8da0ff}}
-        .backdrop{position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:28px;font:16px/1.5 system-ui,sans-serif;color:var(--pp-text)}
-        .dialog{width:min(860px,calc(100vw - 56px));max-height:min(760px,calc(100vh - 56px));background:var(--pp-surface);border:1px solid var(--pp-border);border-radius:18px;box-shadow:0 26px 80px rgba(0,0,0,.32);display:flex;flex-direction:column;overflow:hidden}
-        header,.meta,.buttons{display:flex;align-items:center}header{padding:24px 26px 10px}h2{font-size:23px;margin:0;flex:1}.close{border:0;background:transparent;font-size:29px;line-height:1;cursor:pointer;color:var(--pp-muted);padding:5px 8px}
-        .meta{padding:0 26px 15px;color:var(--pp-muted);gap:10px;font-size:14px}.meta span{flex:1}.wrap{display:flex;gap:8px;align-items:center}
-        textarea{margin:0 26px;min-height:290px;max-height:54vh;resize:vertical;border:1px solid var(--pp-border);border-radius:11px;padding:17px;font:16px/1.6 system-ui,sans-serif;color:var(--pp-text);background:var(--pp-field);box-sizing:border-box}
-        textarea:focus{outline:3px solid color-mix(in srgb,var(--pp-primary) 28%,transparent);border-color:var(--pp-primary)}.buttons{justify-content:flex-end;gap:11px;padding:19px 26px 23px}button{font:600 15px system-ui,sans-serif;border-radius:9px;border:1px solid var(--pp-border);padding:11px 18px;background:var(--pp-button);color:var(--pp-text);cursor:pointer}button.primary{background:var(--pp-primary);border-color:var(--pp-primary);color:#fff}@media(prefers-color-scheme:dark){button.primary{color:#14151a}}button:hover{filter:brightness(.97)}
+        :host {
+          all: initial;
+          --pp-bg: #ffffff;
+          --pp-text: #111827;
+          --pp-muted: #6b7280;
+          --pp-border: #e5e7eb;
+          --pp-card-bg: #f9fafb;
+          --pp-card-border: #e5e7eb;
+          --pp-btn-sec-bg: #f3f4f6;
+          --pp-btn-sec-text: #374151;
+          --pp-btn-sec-border: #e5e7eb;
+          --pp-btn-sec-hover: #e5e7eb;
+          --pp-btn-pri-bg: #1f2937;
+          --pp-btn-pri-text: #ffffff;
+          --pp-btn-pri-hover: #111827;
+          --pp-focus-ring: rgba(31, 41, 55, 0.15);
+        }
+
+        @media (prefers-color-scheme: dark) {
+          :host {
+            --pp-bg: #1d1e21;
+            --pp-text: #f3f4f6;
+            --pp-muted: #9ca3af;
+            --pp-border: rgba(255, 255, 255, 0.08);
+            --pp-card-bg: #161719;
+            --pp-card-border: rgba(255, 255, 255, 0.09);
+            --pp-btn-sec-bg: #27282c;
+            --pp-btn-sec-text: #e5e7eb;
+            --pp-btn-sec-border: rgba(255, 255, 255, 0.08);
+            --pp-btn-sec-hover: #313338;
+            --pp-btn-pri-bg: #808086;
+            --pp-btn-pri-text: #141517;
+            --pp-btn-pri-hover: #96969d;
+            --pp-focus-ring: rgba(255, 255, 255, 0.12);
+          }
+        }
+
+        @keyframes ppFade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes ppZoom {
+          from { opacity: 0; transform: scale(0.97); }
+          to { opacity: 1; transform: scale(1); }
+        }
+
+        .backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 2147483647;
+          background: rgba(0, 0, 0, 0.5);
+          backdrop-filter: blur(4px);
+          -webkit-backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          box-sizing: border-box;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+          color: var(--pp-text);
+          animation: ppFade 0.15s ease-out forwards;
+        }
+
+        .dialog {
+          width: min(540px, calc(100vw - 32px));
+          background: var(--pp-bg);
+          border: 1px solid var(--pp-border);
+          border-radius: 14px;
+          padding: 20px 22px;
+          box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.45), 0 0 1px 1px var(--pp-border);
+          display: flex;
+          flex-direction: column;
+          box-sizing: border-box;
+          animation: ppZoom 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .dialog.expanded {
+          width: min(860px, calc(100vw - 32px));
+        }
+
+        .dialog-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 14px;
+        }
+
+        .header-left {
+          display: flex;
+          align-items: baseline;
+          gap: 9px;
+        }
+
+        .dialog-title {
+          font-size: 15px;
+          font-weight: 600;
+          letter-spacing: -0.01em;
+          color: var(--pp-text);
+          margin: 0;
+        }
+
+        .header-divider {
+          color: var(--pp-muted);
+          opacity: 0.4;
+          font-size: 13px;
+          user-select: none;
+        }
+
+        .muted-counter {
+          font-size: 13px;
+          color: var(--pp-muted);
+          font-weight: 400;
+        }
+
+        .btn-expand {
+          background: none;
+          border: none;
+          color: var(--pp-muted);
+          cursor: pointer;
+          padding: 4px 6px;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.15s ease;
+        }
+
+        .btn-expand:hover {
+          color: var(--pp-text);
+          background: var(--pp-btn-sec-bg);
+        }
+
+        .card {
+          background: var(--pp-card-bg);
+          border: 1px solid var(--pp-card-border);
+          border-radius: 10px;
+          padding: 12px 14px;
+          display: flex;
+          flex-direction: column;
+          box-sizing: border-box;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .card:focus-within {
+          border-color: var(--pp-muted);
+          box-shadow: 0 0 0 2px var(--pp-focus-ring);
+        }
+
+        .card-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
+        }
+
+        .btn-card-action {
+          background: none;
+          border: none;
+          color: var(--pp-muted);
+          font-size: 13px;
+          font-family: inherit;
+          cursor: pointer;
+          padding: 2px 4px;
+          border-radius: 4px;
+          transition: color 0.15s ease;
+        }
+
+        .btn-card-action:hover {
+          color: var(--pp-text);
+        }
+
+        .btn-card-action.active {
+          color: var(--pp-text);
+          font-weight: 600;
+        }
+
+        textarea {
+          width: 100%;
+          min-height: 180px;
+          max-height: 48vh;
+          resize: vertical;
+          border: none;
+          background: transparent;
+          padding: 0;
+          margin: 0;
+          font-family: inherit;
+          font-size: 14px;
+          line-height: 1.6;
+          color: var(--pp-text);
+          box-sizing: border-box;
+          outline: none;
+          transition: min-height 0.22s ease;
+        }
+
+        .dialog.expanded textarea {
+          min-height: 380px;
+          max-height: 68vh;
+        }
+
+        textarea::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+
+        textarea::-webkit-scrollbar-thumb {
+          background: var(--pp-border);
+          border-radius: 3px;
+        }
+
+        .dialog-footer {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          margin-top: 16px;
+        }
+
+        .btn {
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 500;
+          padding: 7px 16px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          line-height: 1.3;
+        }
+
+        .btn:active {
+          transform: scale(0.98);
+        }
+
+        .btn-secondary {
+          background: var(--pp-btn-sec-bg);
+          color: var(--pp-btn-sec-text);
+          border-color: var(--pp-btn-sec-border);
+        }
+
+        .btn-secondary:hover {
+          background: var(--pp-btn-sec-hover);
+        }
+
+        .btn-primary {
+          background: var(--pp-btn-pri-bg);
+          color: var(--pp-btn-pri-text);
+          font-weight: 600;
+        }
+
+        .btn-primary:hover {
+          background: var(--pp-btn-pri-hover);
+        }
       </style>
-      <div class="backdrop" role="presentation"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="pp-title">
-        <header><h2 id="pp-title">Plyph result</h2><button class="close" aria-label="Close">×</button></header>
-        <div class="meta"><span></span><label class="wrap"><input type="checkbox" checked> Wrap lines</label></div>
-        <textarea aria-label="Generated result"></textarea>
-        <div class="buttons"><button class="cancel">Cancel</button><button class="copy">Copy</button><button class="primary replace">Replace</button></div>
-      </section></div>`;
+      <div class="backdrop" role="presentation">
+        <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="pp-title">
+          <header class="dialog-header">
+            <div class="header-left">
+              <h2 id="pp-title" class="dialog-title">Preview</h2>
+              <span class="header-divider">|</span>
+              <span class="muted-counter count-text">0 words · 0 chars</span>
+            </div>
+            <button class="btn-expand" type="button" title="Expand preview size">
+              <svg class="expand-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 2h4v4M6 14H2v-4M14 2l-5.5 5.5M2 14l5.5-5.5"/>
+              </svg>
+            </button>
+          </header>
+          
+          <div class="card">
+            <div class="card-header">
+              <button class="btn-card-action btn-wrap active" type="button" title="Toggle line wrapping">wrap</button>
+              <button class="btn-card-action btn-strip-md strip-md" type="button" title="Remove markdown formatting">remove markdown</button>
+            </div>
+            <textarea aria-label="Generated result" spellcheck="false"></textarea>
+          </div>
+
+          <div class="dialog-footer">
+            <button class="btn btn-secondary cancel" type="button">Cancel</button>
+            <button class="btn btn-secondary copy" type="button">Copy</button>
+            <button class="btn btn-primary replace" type="button">Replace</button>
+          </div>
+        </section>
+      </div>`;
+
     document.documentElement.append(host);
     const textarea = root.querySelector('textarea');
     textarea.value = output;
     updateCount(root, output);
     textarea.addEventListener('input', () => updateCount(root, textarea.value));
-    root.querySelector('.wrap input').addEventListener('change', event => { textarea.wrap = event.target.checked ? 'soft' : 'off'; });
-    root.querySelector('.close').addEventListener('click', closeDialog);
-    root.querySelector('.cancel').addEventListener('click', closeDialog);
-    root.querySelector('.copy').addEventListener('click', () => {
+
+    const expandBtn = root.querySelector('.btn-expand');
+    const dialog = root.querySelector('.dialog');
+    const expandIcon = expandBtn?.querySelector('svg');
+    let isExpanded = false;
+    expandBtn?.addEventListener('click', () => {
+      isExpanded = !isExpanded;
+      dialog?.classList.toggle('expanded', isExpanded);
+      if (expandBtn) expandBtn.title = isExpanded ? 'Collapse preview size' : 'Expand preview size';
+      if (expandIcon) {
+        expandIcon.innerHTML = isExpanded
+          ? '<path d="M14 6h-4V2M2 10h4v4M10 6l5-5M6 10l-5 5"/>'
+          : '<path d="M10 2h4v4M6 14H2v-4M14 2l-5.5 5.5M2 14l5.5-5.5"/>';
+      }
+    });
+
+    const wrapBtn = root.querySelector('.btn-wrap');
+    let isWrapped = true;
+    wrapBtn?.addEventListener('click', () => {
+      isWrapped = !isWrapped;
+      textarea.wrap = isWrapped ? 'soft' : 'off';
+      wrapBtn.classList.toggle('active', isWrapped);
+      wrapBtn.title = isWrapped ? 'Disable line wrapping' : 'Enable line wrapping';
+    });
+    
+    const stripButton = root.querySelector('.strip-md');
+    if (stripButton) {
+      stripButton.addEventListener('click', () => {
+        const cleaned = stripMarkdown(textarea.value);
+        if (cleaned !== textarea.value) {
+          textarea.value = cleaned;
+          updateCount(root, cleaned);
+          stripButton.classList.add('active');
+          stripButton.textContent = 'removed markdown';
+          setTimeout(() => {
+            stripButton.classList.remove('active');
+            stripButton.textContent = 'remove markdown';
+          }, 1500);
+        }
+      });
+    }
+
+    root.querySelector('.cancel')?.addEventListener('click', closeDialog);
+    
+    const copyButton = root.querySelector('.copy');
+    copyButton?.addEventListener('click', () => {
       copyResult(textarea)
-        .then(() => showToast('Copied'))
+        .then(() => {
+          showToast('Copied');
+          if (copyButton) {
+            const orig = copyButton.textContent;
+            copyButton.textContent = 'Copied';
+            setTimeout(() => { copyButton.textContent = orig; }, 1500);
+          }
+        })
         .catch(error => showToast(error.message || 'Could not copy the result.', 'error', 3500));
     });
-    root.querySelector('.replace').addEventListener('click', () => replaceSelection(textarea.value));
-    root.querySelector('.backdrop').addEventListener('click', event => { if (event.target.classList.contains('backdrop')) closeDialog(); });
+
+    root.querySelector('.replace')?.addEventListener('click', () => replaceSelection(textarea.value));
+    
+    let backdropMouseDownTarget = null;
+    const backdrop = root.querySelector('.backdrop');
+    backdrop?.addEventListener('mousedown', event => {
+      backdropMouseDownTarget = event.target;
+    });
+    backdrop?.addEventListener('click', event => {
+      if (event.target === backdrop && backdropMouseDownTarget === backdrop) {
+        closeDialog();
+      }
+      backdropMouseDownTarget = null;
+    });
+
     root.addEventListener('keydown', event => {
       if (event.key === 'Escape') closeDialog();
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') replaceSelection(textarea.value);
@@ -382,7 +892,10 @@
 
   function updateCount(root, value) {
     const words = value.trim() ? value.trim().split(/\s+/u).length : 0;
-    root.querySelector('.meta span').textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${value.length} characters`;
+    const countEl = root.querySelector('.count-text');
+    if (countEl) {
+      countEl.textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${value.length} chars`;
+    }
   }
 
   async function copyResult(textarea) {
@@ -470,5 +983,49 @@
     toastTimer = null;
     if (toastAnchorListeners) { toastAnchorListeners(); toastAnchorListeners = null; }
     document.getElementById('plyph-toast')?.remove();
+  }
+
+  function stripMarkdown(text) {
+    let output = String(text || '');
+    if (!output) return '';
+
+    // 1. Fenced code blocks -> preserve code content
+    output = output.replace(/^```[a-z0-9_-]*\s*\n?([\s\S]*?)\n?```$/gm, '$1');
+
+    // 2. Inline code `code` -> code
+    output = output.replace(/`([^`\n]+)`/g, '$1');
+
+    // 3. Markdown links [text](url) -> text
+    output = output.replace(/\[([^\]\n]+)\]\((?:https?:\/\/[^\s\)]+|#[^\s\)]+)\)/g, '$1');
+
+    // 4. Images ![alt](url) -> alt
+    output = output.replace(/!\[([^\]\n]*)\]\([^\s\)]+\)/g, '$1');
+
+    // 5. ATX Headings # Title -> Title
+    output = output.replace(/^(?:#{1,6})\s+(.+)$/gm, '$1');
+
+    // 6. Blockquotes > text -> text
+    output = output.replace(/^>\s+(.+)$/gm, '$1');
+
+    // 7. Table separator lines |---|---| -> remove
+    output = output.replace(/^\|(?:\s*:?-+:?\s*\|)+\s*$/gm, '');
+
+    // 8. Table cell borders | cell | cell | -> cell   cell
+    output = output.replace(/^\|\s*(.+?)\s*\|$/gm, (_m, row) => {
+      return row.split('|').map(c => c.trim()).filter(Boolean).join('   ');
+    });
+
+    // 9. Word-bounded Bold **text** and __text__
+    output = output.replace(/(?<=^|\s)\*\*([^*\n]+?)\*\*(?=\s|[.,!?;:)]|$)/g, '$1');
+    output = output.replace(/(?<=^|\s)__([^_\n]+?)__(?=\s|[.,!?;:)]|$)/g, '$1');
+
+    // 10. Word-bounded Italic *text* and _text_ (strictly avoiding snake_case_variables)
+    output = output.replace(/(?<=^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:)]|$)/g, '$1');
+    output = output.replace(/(?<=^|\s)_([^_\n]+?)_(?=\s|[.,!?;:)]|$)/g, '$1');
+
+    // 11. Strikethrough ~~text~~
+    output = output.replace(/(?<=^|\s)~~([^~\n]+?)~~(?=\s|[.,!?;:)]|$)/g, '$1');
+
+    return output.trim();
   }
 })();

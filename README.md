@@ -2,6 +2,8 @@
 
 Use AI on selected text in Chrome. Correct writing, rewrite text, run a selection as a prompt, or create custom actions. Results can be reviewed and edited before replacing the original selection.
 
+![Plyph in Chrome](store-assets/plyph-store-hero.png)
+
 ## Install
 
 **Chrome Web Store:** Pending review
@@ -17,7 +19,7 @@ Use AI on selected text in Chrome. Correct writing, rewrite text, run a selectio
 
 ## Features
 
-- **Multiple AI providers** — Ollama, Groq, Gemini, OpenRouter, Cerebras, OpenAI, and Vercel AI Gateway
+- **Multiple AI providers** — Ollama, Groq, Cloudflare Workers AI, B.AI, DeepSeek, Gemini, OpenRouter, Cerebras, OpenAI, Vercel AI Gateway, and Custom OpenAI-Compatible
 - **Model discovery** — Refresh available models after configuring a provider, while still allowing manual model names
 - **Built-in actions** — Professional email, summarize, translate, and explain simply
 - **Custom actions** — Create your own prompts with variables, provider, model, and token limits
@@ -25,7 +27,7 @@ Use AI on selected text in Chrome. Correct writing, rewrite text, run a selectio
 - **Review before replace** — Preview and edit AI output before applying it
 - **History** — Optional local history of inputs and results, disabled by default for privacy
 - **Configurable feedback** — Place status messages at the bottom, beside the selection, or near the mouse
-- **Local-first privacy** — API keys stay in Chrome extension storage, and local Ollama can run entirely on your machine
+- **Local-first privacy** — API keys stay in Chrome extension storage, with optional password-based encryption, and local Ollama can run entirely on your machine
 
 ## Usage
 
@@ -55,6 +57,7 @@ The extension cannot run on Chrome internal pages such as `chrome://extensions` 
 
 - Text is sent only when you explicitly run an action
 - API keys are stored locally using Chrome's `storage.local`
+- Optional API-key encryption uses a password-protected local vault and keeps unlocked keys in memory-only `storage.session` until Chrome restarts
 - Ollama does not require an API key
 - Local Ollama works with the standard localhost configuration without requiring changes to Ollama's CORS settings
 - History is disabled by default

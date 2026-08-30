@@ -1,6 +1,6 @@
 # Privacy Policy for Plyph
 
-_Last updated: August 24, 2026_
+_Last updated: August 29, 2026_
 
 Plyph is a Chrome extension that lets users process selected text using an AI provider of their choice.
 
@@ -22,6 +22,9 @@ Plyph supports:
 
 - Ollama
 - Groq
+- Cloudflare Workers AI
+- B.AI
+- DeepSeek
 - Gemini
 - OpenRouter
 - Cerebras
@@ -36,7 +39,13 @@ If you use a locally running Ollama server, requests can remain entirely on your
 
 ## API Keys
 
-API keys that you enter into Plyph are stored locally using Chrome's `storage.local` API.
+By default, API keys that you enter into Plyph are stored locally using Chrome's `storage.local` API.
+
+You can optionally enable API-key encryption in Settings. When enabled, Plyph encrypts API keys locally with AES-GCM using a key derived from your vault password. Only the encrypted data, salt, and initialization vector are stored in `storage.local`. After you unlock the vault, the decrypted keys and derived key are kept in Chrome's memory-only `storage.session` area and are cleared when Chrome restarts or the extension is reloaded, updated, disabled, or locked manually.
+
+Plyph cannot recover a forgotten vault password. You can reset a locked vault, which permanently deletes the saved API keys without changing other settings. Encryption is optional so you can continue using standard local storage without entering a password if you prefer.
+
+Plyph restricts its local and session storage to trusted extension contexts so web-page content scripts cannot directly read it.
 
 Plyph uses these keys only to authenticate requests to the AI provider you selected.
 
@@ -106,7 +115,6 @@ Plyph requests browser permissions necessary for its functionality, including pe
 - Store extension settings and optional history
 - Communicate with configured AI providers
 - Communicate with local Ollama servers
-- Detect the browser color scheme for the toolbar icon
 
 These permissions are used only to provide Plyph's text-processing functionality.
 
@@ -120,7 +128,7 @@ Responses received from AI providers are treated as text or data and are not exe
 
 ## Data Retention and Deletion
 
-Settings, API keys, and optional history remain in Chrome's local extension storage until you change or delete them or uninstall the extension.
+Settings, API keys or their encrypted vault data, and optional history remain in Chrome's extension storage until you change or delete them or uninstall the extension. Memory-only unlocked vault data is cleared at the end of the Chrome session or when the extension is reloaded, updated, disabled, or locked manually.
 
 History entries can be deleted directly from Plyph.
 

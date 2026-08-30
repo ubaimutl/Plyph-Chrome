@@ -70,15 +70,17 @@ p {
     width: 224px;
     min-width: 224px;
     max-width: 224px;
-
+    margin: 0;
+    padding: 0;
     background: var(--surface);
     font-size: 13.5px;
-
-    border: 2px solid var(--popup-border);
+    box-sizing: border-box;
 }
 
 .popup-menu {
-    padding: 5px;
+    padding: 5px 5px 6px 5px;
+    border: 2px solid var(--popup-border);
+    box-sizing: border-box;
 }
 
 .popup-tabs {
@@ -300,6 +302,18 @@ p {
 .settings-header > div:first-child {
     flex: 1;
 }
+.settings-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.settings-brand img {
+    width: 50px;
+    height: 50px;
+    flex: 0 0 50px;
+    border-radius: 13px;
+    box-shadow: 0 5px 14px rgba(20, 22, 30, .16);
+}
 .settings-header h1 {
     margin-bottom: 4px;
     font-size: 28px;
@@ -436,6 +450,37 @@ p {
 }
 .provider-config {
     margin-top: 16px;
+}
+.provider-reasoning {
+    margin-top: 16px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+}
+.provider-reasoning span,
+.provider-notice > span:last-child {
+    display: flex;
+    flex-direction: column;
+}
+.provider-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+}
+.provider-notice-icon {
+    flex: 0 0 20px;
+    color: var(--muted);
+    font-size: 17px;
+    line-height: 1.25;
+    text-align: center;
+}
+.provider-notice.warning .provider-notice-icon {
+    color: #b78500;
+}
+.provider-notice small {
+    margin-top: 2px;
+    color: var(--muted);
 }
 .model-picker {
     display: flex;
@@ -695,6 +740,59 @@ dialog form {
 .history-toggle small {
     color: var(--muted);
     font-weight: 400;
+}
+.vault-panel {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+.vault-panel[hidden] {
+    display: none;
+}
+.vault-panel p {
+    margin: 0 0 12px;
+}
+.vault-actions,
+.vault-unlock-row,
+.vault-status-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+.vault-actions {
+    margin-top: 12px;
+}
+.vault-unlock-row label {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    font-weight: 600;
+}
+.vault-unlock-row button {
+    align-self: flex-end;
+}
+.vault-status-row {
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+.vault-status-row > div:first-child {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 220px;
+}
+.vault-status-row small {
+    margin-top: 2px;
+    color: var(--muted);
+}
+.vault-message {
+    min-height: 1.4em;
+    margin-top: 10px;
+    color: var(--muted);
+}
+.vault-message.error {
+    color: var(--danger);
 }
 .history-limit-row {
     margin-top: 18px;
