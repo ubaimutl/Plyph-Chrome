@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "102",
   "name": "Plyph",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Use AI to correct, rewrite, or transform selected text in Chrome.",
   "permissions": [
     "activeTab",

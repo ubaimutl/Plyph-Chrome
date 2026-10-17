@@ -320,7 +320,7 @@
           .quick-actions { display: flex; align-items: center; gap: 2px; border-left: 1px solid var(--border); padding-left: 3px; }
           [hidden] { display: none !important; }
           .glyph { display: flex; width: 16px; height: 16px; flex: 0 0 16px; }
-          .glyph svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+          .glyph svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
           .menu { position: absolute; top: calc(100% + 6px); right: 0; display: flex; flex-direction: column;
             width: 230px; max-width: calc(100vw - 16px); max-height: min(360px, 55vh); overflow-y: auto;
             padding: 5px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
@@ -446,6 +446,18 @@
     }
   }
 
+  function triggerActionIcon(mode) {
+    const paths = {
+      ask: '<path d="M5 3.5h14A1.5 1.5 0 0 1 20.5 5v11a1.5 1.5 0 0 1-1.5 1.5h-7L7 21v-3.5H5A1.5 1.5 0 0 1 3.5 16V5A1.5 1.5 0 0 1 5 3.5Z"/><path d="M9.8 8a2.2 2.2 0 1 1 3.6 1.7c-.9.6-1.4 1-1.4 2"/><circle cx="12" cy="14.5" r=".7" fill="currentColor" stroke="none"/>',
+      correct: '<path d="m8.5 10.5 11 11 2-2-11-11Z"/><path d="m11 13 2-2M5 2v4M3 4h4M16 2v4M14 4h4M3 12v4M1 14h4"/>',
+      rewrite: '<path d="M10 5H5a1 1 0 0 0-1 1v14h14v-6M11 13l1-4L19 2l3 3-7 7ZM17 4l3 3"/>',
+      prompt: '<path d="M6 3.5a.7.7 0 0 1 1.1-.6l14 8.5a.7.7 0 0 1 0 1.2l-14 8.5a.7.7 0 0 1-1.1-.6Z" fill="currentColor" stroke="none"/>',
+      more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+      custom: '<path d="m10 4 2.3 6.7L19 13l-6.7 2.3L10 22l-2.3-6.7L1 13l6.7-2.3ZM19 1l1.1 3.9L24 6l-3.9 1.1L19 11l-1.1-3.9L14 6l3.9-1.1Z"/>',
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[mode] || paths.custom}</svg>`;
+  }
+
   function overflowActions() {
     const quickIds = new Set(toolbarActionIds);
     const builtins = [
@@ -460,18 +472,6 @@
         .filter(action => !quickIds.has(action.id))
         .map(action => ({name: action.name, mode: 'custom', actionId: action.id})),
     ];
-  }
-
-  function triggerActionIcon(mode) {
-    const paths = {
-      ask: '<path d="M17 9a6.5 6.5 0 0 1-6.5 6.5H7L3 18V6a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3Z"/><path d="M6.5 7h7M6.5 10.5H11"/>',
-      correct: '<path d="m2.5 12 3.5-9 3.5 9M4 8.5h4M11 13l2.5 2.5 4-5"/>',
-      rewrite: '<path d="m12.5 3.5 4 4M3 17l4.5-1 10-10a1.5 1.5 0 0 0 0-2l-1.5-1.5a1.5 1.5 0 0 0-2 0l-10 10Z"/><path d="M11 17h6"/>',
-      prompt: '<path d="m6 3 10 7-10 7Z"/>',
-      more: '<circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/>',
-      custom: '<path d="M3 5h5m4 0h5M3 10h9m4 0h1M3 15h2m4 0h8M8 3v4m4 1v4M5 13v4"/>',
-    };
-    return `<svg viewBox="0 0 20 20" aria-hidden="true">${paths[mode] || paths.custom}</svg>`;
   }
 
   function sameSelection(a, b) {

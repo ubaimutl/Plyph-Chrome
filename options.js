@@ -543,9 +543,12 @@ function providerNotice(symbol, titleText, descriptionText, warning = false) {
   row.className = `provider-notice${warning ? ' warning' : ''}`;
   const icon = document.createElement('span');
   icon.className = 'provider-notice-icon';
-  icon.textContent = symbol;
   icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = warning
+    ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.8 17.8 16.5H2.2Z"/><path d="M10 7.5v4"/><circle cx="10" cy="13.8" r=".9" fill="currentColor" stroke="none"/></svg>'
+    : '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"/><path d="M10 9.2v4.2"/><circle cx="10" cy="6.8" r=".9" fill="currentColor" stroke="none"/></svg>';
   const copy = document.createElement('span');
+  copy.className = 'provider-notice-copy';
   const title = document.createElement('strong');
   title.textContent = titleText;
   const description = document.createElement('small');
@@ -892,14 +895,21 @@ function renderActions() {
     const detail = document.createElement('small'); detail.textContent = `${action.inputMode === 'prompt' ? 'Prompt' : 'Transform'} · ${action.provider ? PROVIDERS.find(p => p.id === action.provider)?.name : 'Active provider'}${action.enabled === false ? ' · Disabled' : ''}`;
     text.append(name, detail);
     const controls = document.createElement('div'); controls.className = 'row-buttons';
-    controls.append(rowButton('Edit', () => openAction(action)), rowButton('↑', () => move(index, -1)), rowButton('↓', () => move(index, 1)), rowButton('Delete', () => removeAction(action.id), true));
+    controls.append(rowButton('Edit', () => openAction(action)), rowButton('↑', () => move(index, -1), false, `Move ${action.name} up`), rowButton('↓', () => move(index, 1), false, `Move ${action.name} down`), rowButton('Delete', () => removeAction(action.id), true));
     row.append(text, controls); root.append(row);
   });
+  renderToolbarActions();
 }
 
-function rowButton(text, click, danger = false) { const button = document.createElement('button'); button.className = danger ? 'text-button danger' : 'text-button'; button.textContent = text; button.addEventListener('click', click); return button; }
+function rowButton(text, click, danger = false, label = '') { const button = document.createElement('button'); button.className = danger ? 'text-button danger' : 'text-button'; button.textContent = text; if (label) button.setAttribute('aria-label', label); button.addEventListener('click', click); return button; }
 function move(index, direction) { const next = index + direction; if (next < 0 || next >= settings.customActions.length) return; [settings.customActions[index], settings.customActions[next]] = [settings.customActions[next], settings.customActions[index]]; saveNow(); renderActions(); }
-function removeAction(id) { settings.customActions = settings.customActions.filter(item => item.id !== id); saveNow(); renderActions(); }
+function removeAction(id) {
+  const action = settings.customActions.find(item => item.id === id);
+  if (action && !confirm(`Delete the "${action.name}" action? This cannot be undone.`)) return;
+  settings.customActions = settings.customActions.filter(item => item.id !== id);
+  saveNow();
+  renderActions();
+}
 
 function openAction(action = {}) {
   $('#action-dialog-title').textContent = action.id ? 'Edit custom action' : 'New custom action';
