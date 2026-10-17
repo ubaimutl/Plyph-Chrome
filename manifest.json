@@ -12,6 +12,7 @@
     "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
+    "https://auth.openai.com/*",
     "https://api.groq.com/*",
     "https://api.cloudflare.com/*",
     "https://api.b.ai/*",
@@ -51,7 +52,8 @@
     {
       "resources": [
         "toolbar/*",
-        "icons/*"
+        "icons/*",
+        "chatgpt-callback.html"
       ],
       "matches": [
         "<all_urls>"

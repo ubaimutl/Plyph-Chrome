@@ -1,5 +1,6 @@
 export const PROVIDERS = [
   {id: 'ollama', name: 'Ollama (local)'},
+  {id: 'chatgpt', name: 'ChatGPT Account'},
   {id: 'groq', name: 'Groq'},
   {id: 'cloudflare', name: 'Cloudflare Workers AI'},
   {id: 'bai', name: 'B.AI'},
@@ -45,13 +46,16 @@ export const DEFAULTS = {
   customOpenAiUrl: '',
   cloudflareAccountId: '',
   cloudflareReasoningEnabled: false,
+  chatgptAccountId: '',
+  chatgptThinkingEffort: 'auto',
+  chatgptWelcomeShown: false,
   models: {
     ollama: 'qwen2.5-coder:1.5b', groq: 'openai/gpt-oss-120b',
     cloudflare: '@cf/qwen/qwen3-30b-a3b-fp8', bai: 'deepseek-v4-flash',
     deepseek: 'deepseek-v4-flash',
     gemini: 'gemini-3.5-flash-lite', openrouter: 'openrouter/free',
     cerebras: 'gpt-oss-120b', openai: 'gpt-4.1-mini',
-    vercel: 'openai/gpt-5.4-mini', custom_openai: '',
+    vercel: 'openai/gpt-5.4-mini', custom_openai: '', chatgpt: '',
   },
   apiKeys: {},
   apiKeyVault: null,
@@ -65,7 +69,7 @@ export const DEFAULTS = {
   customActions: DEFAULT_ACTIONS,
   previewResults: true,
   selectionTrigger: true,
-  // History is opt-in because results may contain private page content.
+
   historyEnabled: false,
   history: [],
   historyLimit: 50,
@@ -208,7 +212,7 @@ export async function getSettings() {
       vaultLocked = true;
     }
   }
-  // Older builds briefly exposed an Ollama API-key field. Never surface or use that obsolete value.
+
   delete apiKeys.ollama;
   return {
     ...DEFAULTS, ...saved,
@@ -225,34 +229,24 @@ export function enabledActions(settings) {
   return (settings.customActions || []).filter(action => action.enabled !== false && action.name?.trim());
 }
 
-/**
- * Conservative Markdown detector.
- * Prefers false negatives over false positives.
- * Only flags text when clear structural patterns (code fences, tables, markdown links)
- * or multiple distinct markdown signals are present.
- * Never flags filenames, snake_case, math, URLs, or standard punctuation.
- */
 export function isMarkdown(text) {
   const input = String(text || '').trim();
   if (!input || input.length < 3) return false;
 
-  // Definite Structural Signals (1 match is enough)
-  // 1. Fenced code block (```...```)
   if (/^```[a-z0-9_-]*\s*\n[\s\S]*?\n```$/m.test(input)) return true;
-  // 2. Markdown table (| header | header |\n|---|---|)
+
   if (/^\|[^\n|]+\|[^\n|]+\|\s*\n\|(?:\s*:?-+:?\s*\|){2,}/m.test(input)) return true;
-  // 3. Markdown links/images ([text](https://...))
+
   if (/\[[^\n\]]{1,120}\]\(https?:\/\/[^\s\)]+\)/.test(input)) return true;
 
-  // Moderate structural signals (require >= 2 distinct signals)
   let score = 0;
-  // ATX Headings at start of line with space and alphanumeric text
+
   if (/^#{1,6}\s+[A-Za-z0-9]/m.test(input)) score++;
-  // Blockquotes at start of line
+
   if (/^>\s+[A-Za-z0-9]/m.test(input)) score++;
-  // Multi-item Markdown list (at least 2 list items)
+
   if (/^(?:[*+-]|\d+\.)\s+\S+.+\n\s*(?:[*+-]|\d+\.)\s+\S+/m.test(input)) score++;
-  // Word-bounded bold (not snake_case or math)
+
   if (/(?:^|\s)\*\*(?!\s)[^*\n]+(?<!\s)\*\*(?=\s|[.,!?;:)]|$)/.test(input) ||
       /(?:^|\s)__(?!\s)[^_\n]+(?<!\s)__(?=\s|[.,!?;:)]|$)/.test(input)) {
     score++;
@@ -261,81 +255,56 @@ export function isMarkdown(text) {
   return score >= 2;
 }
 
-/**
- * Resolves the formatting mode ('text', 'markdown', or 'preserve-markdown')
- * based on explicit settings, bidirectional user intent, and conservative input analysis.
- */
 export function resolveOutputFormat(action, text, effectivePrompt = '') {
   const mode = action?.outputFormat || 'auto';
   if (mode === 'text') return 'text';
   if (mode === 'markdown') return 'markdown';
 
-  // In Auto mode: Inspect effective user instruction for explicit intent in BOTH directions
   const promptStr = String(effectivePrompt || action?.prompt || '').toLowerCase();
-  
-  // 1. Explicit request for plain text / no markdown
+
   if (/\b(plain\s*text|no\s*markdown|without\s*markdown|remove\s*markdown|strip\s*markdown|unformatted)\b/i.test(promptStr)) {
     return 'text';
   }
 
-  // 2. Explicit request for Markdown
   if (/\b(as\s*markdown|in\s*markdown|markdown\s*format|format\s*as\s*md|markdown\s*table|markdown\s*list|markdown\s*code)\b/i.test(promptStr)) {
     return 'markdown';
   }
 
-  // 3. Fallback to conservative input detection
   if (isMarkdown(text)) {
     return 'preserve-markdown';
   }
 
-  // 4. Default to plain text
   return 'text';
 }
 
-/**
- * Non-destructive Markdown stripper.
- * Strips only confident Markdown syntax while strictly preserving snake_case,
- * filenames, math expressions, code, URLs, and natural content.
- */
 export function stripMarkdown(text) {
   let output = String(text || '');
   if (!output) return '';
 
-  // 1. Fenced code blocks -> preserve code content
   output = output.replace(/^```[a-z0-9_-]*\s*\n?([\s\S]*?)\n?```$/gm, '$1');
 
-  // 2. Inline code `code` -> code
   output = output.replace(/`([^`\n]+)`/g, '$1');
 
-  // 3. Markdown links [text](url) -> text
   output = output.replace(/\[([^\]\n]+)\]\((?:https?:\/\/[^\s\)]+|#[^\s\)]+)\)/g, '$1');
 
-  // 4. Images ![alt](url) -> alt
   output = output.replace(/!\[([^\]\n]*)\]\([^\s\)]+\)/g, '$1');
 
-  // 5. ATX Headings # Title -> Title
   output = output.replace(/^(?:#{1,6})\s+(.+)$/gm, '$1');
 
-  // 6. Blockquotes > text -> text
   output = output.replace(/^>\s+(.+)$/gm, '$1');
 
-  // 7. Table separator lines |---|---| -> remove
   output = output.replace(/^\|(?:\s*:?-+:?\s*\|)+\s*$/gm, '');
 
-  // 8. Table cell borders | cell | cell | -> cell   cell
   output = output.replace(/^\|\s*(.+?)\s*\|$/gm, (_m, row) => {
     return row.split('|').map(c => c.trim()).filter(Boolean).join('   ');
   });
 
-  // 9. Word-bounded Bold **text** and __text__
   output = output.replace(/(?<=^|\s)\*\*([^*\n]+?)\*\*(?=\s|[.,!?;:)]|$)/g, '$1');
   output = output.replace(/(?<=^|\s)__([^_\n]+?)__(?=\s|[.,!?;:)]|$)/g, '$1');
 
-  // 10. Word-bounded Italic *text* and _text_ (strictly avoiding snake_case_variables)
   output = output.replace(/(?<=^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:)]|$)/g, '$1');
   output = output.replace(/(?<=^|\s)_([^_\n]+?)_(?=\s|[.,!?;:)]|$)/g, '$1');
 
-  // 11. Strikethrough ~~text~~
   output = output.replace(/(?<=^|\s)~~([^~\n]+?)~~(?=\s|[.,!?;:)]|$)/g, '$1');
 
   return output.trim();

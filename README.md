@@ -25,10 +25,10 @@
 
 ## Key Features
 
-- **Multiple AI Providers** — Connect to local Ollama, Groq, DeepSeek, Gemini, OpenAI, OpenRouter, Cerebras, Cloudflare Workers AI, B.AI, Vercel AI Gateway, or any **Custom OpenAI-Compatible** endpoint.
+- **Multiple AI Providers** — Connect to local Ollama, your **ChatGPT Account**, Groq, DeepSeek, Gemini, OpenAI, OpenRouter, Cerebras, Cloudflare Workers AI, B.AI, Vercel AI Gateway, or any **Custom OpenAI-Compatible** endpoint.
 - **Model Discovery** — Automatically discover models from configured endpoints or type any model name manually.
 - **Output Format Controls** — Choose between `Auto` (smart Markdown preservation), strict `Plain text`, or explicit `Markdown` output.
-- **Compact Preview & Editor** — Review and edit generated text before replacing, with instant Markdown removal, line-wrapping toggle, and an expandable wide view.
+- **Compact Preview & Editor** — Review and edit generated text before replacing, with a word-level changes view, line-wrapping toggle, and an expandable wide view. Markdown shape follows each action's output format instead of manual cleanup.
 - **Flexible Triggering** — Access Plyph via the floating selection button, right-click context menu, toolbar popup, or custom keyboard shortcuts.
 - **Custom Actions** — Build and save reusable prompt templates with custom variables, provider overrides, and token limits.
 - **Local-First Privacy** — Credentials and history are stored locally in Chrome storage with optional password-based vault encryption. Zero analytics or tracking.
@@ -86,3 +86,18 @@ Install directly from the [**Chrome Web Store**](https://chromewebstore.google.c
 ### Ask about selected text
 
 Select text, open the floating toolbar, and choose **Ask**. Enter an instruction or question and press **Send** (or Ctrl/Cmd+Enter). Ask is also available in the extension popup, right-click menu, and Chrome shortcut settings. It uses your active provider and existing result-preview setting.
+
+### ChatGPT sign-in
+
+Use your ChatGPT plan directly in Plyph without an API key.
+
+1. Open Plyph settings and choose **ChatGPT Account** as the active provider.
+2. Click **Continue with ChatGPT** and finish signing in through the sign-in window that opens.
+3. Return to Plyph settings and click **Refresh** to choose a model.
+4. Select text and run an action as usual.
+
+You can add and switch between saved accounts, or sign out in settings. Access tokens refresh automatically, and credentials never leave Chrome storage.
+
+Requests use your shared ChatGPT allowance. Open **Manage usage** to review usage and account access. Available models depend on your account.
+
+For ChatGPT actions, set the output token limit to **Auto**. Explicit output token limits are not supported.

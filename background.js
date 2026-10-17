@@ -5,9 +5,11 @@ import {
   getSettings,
   resolveOutputFormat,
 } from "./shared.js";
+import {ChatGPTClient} from "./chatgpt.js";
 
 const PROVIDER_NAMES = {
   ollama: "Ollama",
+  chatgpt: "ChatGPT Account",
   custom_openai: "Custom OpenAI-Compatible",
   groq: "Groq",
   cloudflare: "Cloudflare Workers AI",
@@ -19,6 +21,8 @@ const PROVIDER_NAMES = {
   openai: "OpenAI",
   vercel: "Vercel AI Gateway",
 };
+
+const chatgpt = new ChatGPTClient();
 
 async function restrictStorageAccess() {
   for (const area of [chrome.storage.local, chrome.storage.session]) {
@@ -50,13 +54,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
     return true;
   }
+  if (message.type === "CHATGPT_ACCOUNTS") {
+    reply(chatgpt.accounts(), sendResponse, (accounts) => ({accounts}));
+    return true;
+  }
+  if (message.type === "CHATGPT_SIGN_IN") {
+    reply(chatgpt.signIn(message.clientId || null), sendResponse, (result) => result);
+    return true;
+  }
+  if (message.type === "CHATGPT_SIGN_OUT") {
+    reply(chatgpt.signOut(message.clientId || ""), sendResponse, (result) => result);
+    return true;
+  }
+  if (message.type === "CHATGPT_MODELS") {
+    reply(chatgpt.models(), sendResponse, (models) => ({models}));
+    return true;
+  }
+  if (message.type === 'CHATGPT_CALLBACK') {
+    reply(
+      chatgpt.consumeCallback(message.query || {})
+        .then(consumed => {
+          if (!consumed)
+            throw new Error('This sign-in response did not match a waiting attempt. It may have expired — try signing in again.');
+          return {};
+        }),
+      sendResponse,
+      () => ({}),
+    );
+    return true;
+  }
   return false;
 });
+
+function reply(promise, sendResponse, payload) {
+  promise
+    .then((value) => sendResponse({ok: true, ...payload(value)}))
+    .catch((error) =>
+      sendResponse({ok: false, error: error.message || String(error)}),
+    );
+}
 
 async function getPageConfig() {
   const settings = await getSettings();
   return {
     customActions: settings.customActions,
+    toolbarActions: settings.toolbarActions,
     selectionTrigger: settings.selectionTrigger,
     feedbackPlacement: settings.feedbackPlacement,
   };
@@ -338,8 +380,7 @@ async function runOnTab(tabId, actionRequest, fallbackText = "") {
   await ensureContent(tabId);
   const instruction = typeof actionRequest?.instruction === "string"
     ? actionRequest.instruction.trim() : "";
-  // Submitted Ask requests retain the selection captured before the prompt
-  // received focus. The prompt field itself must never become the selection.
+
   const capture = actionRequest?.mode === "ask" && instruction && fallbackText
     ? {text: fallbackText}
     : await chrome.tabs.sendMessage(tabId, {type: "CAPTURE_SELECTION"});
@@ -430,7 +471,7 @@ async function showError(tabId, error) {
       message: error.message || String(error),
     });
   } catch {
-    /* Chrome blocks extension scripts on internal pages. */
+
   }
 }
 
@@ -483,8 +524,7 @@ function estimateTokens(text) {
 function maxTokens(text, value = 0) {
   const explicit = positiveInt(value);
   if (explicit) return explicit;
-  // By default, allow generous output headroom (at least 2048 tokens + text tokens)
-  // so reasoning models and expansions are never prematurely cut off.
+
   return Math.max(2048, Math.min(8192, estimateTokens(text) * 4 + 1024));
 }
 function positiveInt(value) {
@@ -535,7 +575,7 @@ async function requestJson(url, headers, body, provider, model) {
   try {
     data = await response.json();
   } catch {
-    /* handled below */
+
   }
   if (!response.ok) {
     const directError = data?.error?.message || data?.error;
@@ -644,6 +684,19 @@ ${text}
     if (!data.message?.content)
       throw new Error("Ollama returned an empty response.");
     return cleanOutput(data.message.content, action.inputMode);
+  }
+  if (provider === "chatgpt") {
+    if (requestedOutputLimit)
+      throw new Error(
+        "ChatGPT does not support output token limits. Set this action's output limit to Auto.",
+      );
+    const result = await chatgpt.transform(
+      userText,
+      systemPrompt,
+      model,
+      settings.chatgptThinkingEffort,
+    );
+    return cleanOutput(result, action.inputMode);
   }
   if (settings.vaultLocked)
     throw new Error('Unlock your encrypted API keys in Plyph Settings.');

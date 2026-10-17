@@ -13,6 +13,7 @@ let settings = await getSettings();
 let saveTimer;
 const $ = selector => document.querySelector(selector);
 const modelCache = new Map();
+let chatgptModelControls = null;
 
 for (const select of [$('#provider'), $('#run-provider'), $('#action-provider')]) {
   if (select !== $('#provider')) select.add(new Option('Use active provider', ''));
@@ -105,6 +106,25 @@ function renderProviderFields() {
   root.replaceChildren();
   const fields = document.createElement('div'); fields.className = 'fields two provider-config';
   fields.append(modelField(provider));
+  if (provider === 'chatgpt') {
+    root.append(fields);
+    renderChatGPTAccounts(root);
+    const extras = document.createElement('div');
+    extras.className = 'fields two provider-config';
+    extras.append(thinkingEffortRow());
+    root.append(extras);
+    const usage = providerNotice('⚠', 'Using ChatGPT plan',
+      'Uses your shared ChatGPT allowance. Custom action output limits must be set to Auto.', true);
+    const link = document.createElement('a');
+    link.className = 'secondary manage-usage';
+    link.href = 'https://chatgpt.com/settings/usage';
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.textContent = 'Manage usage';
+    usage.append(link);
+    root.append(usage);
+    return;
+  }
   if (provider === 'ollama') {
     fields.append(field('Server URL', settings.ollamaUrl, false, value => { settings.ollamaUrl = value; queueSave(); }));
   } else if (provider === 'custom_openai') {
@@ -147,6 +167,205 @@ function renderProviderFields() {
       : 'Larger models may use provider allowances faster or incur charges, depending on your account.',
     true,
   ));
+}
+
+function clearChatGPTModels() {
+  modelCache.delete('chatgpt');
+  if (!chatgptModelControls) return;
+  chatgptModelControls.input.value = '';
+  applyModelOptions(chatgptModelControls.select, []);
+  chatgptModelControls.status.textContent = '';
+}
+
+function renderChatGPTAccounts(root) {
+  const wrap = document.createElement('div');
+  wrap.className = 'chatgpt-accounts';
+  const label = document.createElement('label');
+  label.textContent = 'Account';
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', 'ChatGPT account');
+  label.append(select);
+  const status = document.createElement('small');
+  status.className = 'chatgpt-status';
+  status.setAttribute('aria-live', 'polite');
+  const actions = document.createElement('div');
+  actions.className = 'chatgpt-actions';
+  const connect = document.createElement('button');
+  connect.type = 'button';
+  connect.className = 'primary';
+  connect.textContent = 'Continue with ChatGPT';
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'secondary';
+  add.textContent = 'Add account';
+  const signOut = document.createElement('button');
+  signOut.type = 'button';
+  signOut.className = 'secondary danger';
+  signOut.textContent = 'Sign out';
+  actions.append(connect, add, signOut);
+  wrap.append(label, status, actions);
+  root.append(wrap);
+
+  let accounts = [];
+  let busy = false;
+
+  const say = text => { status.textContent = text; };
+  const currentAccount = () => accounts.find(item => item.id === select.value);
+
+  const updateButtons = () => {
+    const account = currentAccount();
+    select.disabled = busy || !accounts.length;
+    connect.hidden = Boolean(account?.connected && account?.authorized);
+    connect.disabled = busy;
+    add.hidden = !accounts.length;
+    add.disabled = busy;
+    signOut.hidden = !account?.connected;
+    signOut.disabled = busy;
+    status.textContent = busy ? 'Connecting… finish signing in in the window that opens.' : !account
+      ? (accounts.length ? '' : 'No saved accounts yet.')
+      : account.connected
+        ? (account.authorized ? 'Connected' : 'Plan access was not granted')
+        : 'Not connected';
+  };
+
+  const refreshChatGPTModels = () => {
+    if (!chatgptModelControls) return;
+
+    clearTimeout(saveTimer);
+    saveNow().then(() => refreshModelList(
+      'chatgpt',
+      chatgptModelControls.input,
+      chatgptModelControls.select,
+      chatgptModelControls.status,
+      chatgptModelControls.refresh,
+    ));
+  };
+
+  const reload = async () => {
+    const response = await chrome.runtime.sendMessage({type: 'CHATGPT_ACCOUNTS'});
+    if (!response?.ok) throw new Error(response?.error || 'Could not load ChatGPT accounts.');
+    accounts = response.accounts;
+    select.replaceChildren(...(accounts.length
+      ? accounts.map(account => new Option(account.label, account.id))
+      : [new Option('No saved accounts', '')]));
+    select.value = accounts.some(account => account.id === settings.chatgptAccountId)
+      ? settings.chatgptAccountId
+      : accounts[0]?.id ?? '';
+    if ((select.value || '') !== (settings.chatgptAccountId || '')) {
+      settings.chatgptAccountId = select.value;
+      settings.models.chatgpt = '';
+      clearChatGPTModels();
+      queueSave();
+      if (currentAccount()?.connected) refreshChatGPTModels();
+    }
+    updateButtons();
+  };
+
+  const run = async action => {
+    if (busy) return;
+    busy = true;
+    updateButtons();
+    let message = '';
+    try {
+      message = await action() || '';
+    } catch (error) {
+      console.error('Plyph ChatGPT action failed:', error);
+      message = error?.message || String(error);
+    }
+    busy = false;
+    updateButtons();
+    try {
+      await reload();
+    } catch (error) {
+      console.error('Plyph ChatGPT reload failed:', error);
+      message = error?.message || String(error);
+    }
+
+    if (message) say(message);
+  };
+
+  const login = id => run(async () => {
+
+    const keepalive = chrome.runtime.connect({name: 'plyph-chatgpt-signin'});
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({type: 'CHATGPT_SIGN_IN', clientId: id || null});
+    } finally {
+      keepalive.disconnect();
+    }
+    if (!result?.ok) throw new Error(result?.error || 'ChatGPT sign-in failed.');
+    settings.chatgptAccountId = result.id;
+    settings.models.chatgpt = '';
+    clearChatGPTModels();
+    queueSave();
+    if (result.authorized) {
+      refreshChatGPTModels();
+      showChatGPTWelcome();
+      return 'Connected to your ChatGPT plan.';
+    }
+    return 'Plan access was not granted. Reconnect and allow plan usage.';
+  });
+
+  connect.addEventListener('click', () => login(select.value || null));
+  add.addEventListener('click', () => login(null));
+  signOut.addEventListener('click', () => run(async () => {
+    const id = select.value;
+    const result = await chrome.runtime.sendMessage({type: 'CHATGPT_SIGN_OUT', clientId: id});
+    if (!result?.ok) throw new Error(result?.error || 'Could not sign out.');
+    if (settings.chatgptAccountId === id) {
+      settings.chatgptAccountId = '';
+      settings.models.chatgpt = '';
+      clearChatGPTModels();
+      queueSave();
+    }
+    return result.revoked
+      ? 'Signed out.'
+      : 'Signed out locally. Remove this connection in Manage usage to confirm remote revocation.';
+  }));
+
+  select.addEventListener('change', () => {
+    if (busy) return;
+    settings.chatgptAccountId = select.value;
+    settings.models.chatgpt = '';
+    clearChatGPTModels();
+    queueSave();
+    updateButtons();
+    if (currentAccount()?.connected) refreshChatGPTModels();
+  });
+
+  updateButtons();
+  reload().catch(error => say(error.message || String(error)));
+}
+
+function thinkingEffortRow() {
+  const label = document.createElement('label');
+  label.textContent = 'Thinking effort';
+  const select = document.createElement('select');
+  for (const [value, text] of [
+    ['auto', 'Auto — model default'],
+    ['low', 'Low'],
+    ['medium', 'Medium'],
+    ['high', 'High'],
+  ]) select.add(new Option(text, value));
+  select.value = ['auto', 'low', 'medium', 'high'].includes(settings.chatgptThinkingEffort)
+    ? settings.chatgptThinkingEffort : 'auto';
+  select.addEventListener('change', () => { settings.chatgptThinkingEffort = select.value; queueSave(); });
+  const hint = document.createElement('small');
+  hint.className = 'model-status';
+  hint.textContent = 'Applies to all actions using this provider. Higher effort may take longer. Support varies by model.';
+  label.append(select, hint);
+  return label;
+}
+
+function showChatGPTWelcome() {
+  if (settings.chatgptWelcomeShown) return;
+  const dialog = $('#chatgpt-welcome');
+  dialog.showModal();
+  $('#chatgpt-welcome-ok').addEventListener('click', () => {
+    dialog.close();
+    settings.chatgptWelcomeShown = true;
+    queueSave();
+  }, {once: true});
 }
 
 function renderVaultState() {
@@ -330,6 +549,13 @@ function modelField(provider) {
   input.value = settings.models[provider] || '';
   input.placeholder = provider === 'ollama' ? 'Or type a model name manually' : 'Or type a model name manually';
   input.autocomplete = 'off';
+  if (provider === 'chatgpt') {
+
+    input.hidden = true;
+    chatgptModelControls = {select, input, status: null, refresh: null};
+  } else {
+    chatgptModelControls = null;
+  }
   input.addEventListener('input', () => {
     settings.models[provider] = input.value.trim();
     select.value = modelCache.get(provider)?.some(model => model.id === input.value) ? input.value : '';
@@ -353,12 +579,19 @@ function modelField(provider) {
     ? `${models.length} models loaded`
     : provider === 'ollama'
       ? 'Click Refresh to load installed models.'
-      : provider === 'cloudflare'
-        ? 'Add your API token and Account ID, then click Refresh.'
-        : 'Add your API key, then click Refresh.';
+      : provider === 'chatgpt'
+        ? 'Connect your account, then click Refresh.'
+        : provider === 'cloudflare'
+          ? 'Add your API token and Account ID, then click Refresh.'
+          : 'Add your API key, then click Refresh.';
   refresh.addEventListener('click', () => refreshModelList(provider, input, select, status, refresh));
   controls.append(select, input, refresh);
   label.append(controls, status);
+  if (provider === 'chatgpt') {
+    chatgptModelControls.select = select;
+    chatgptModelControls.status = status;
+    chatgptModelControls.refresh = refresh;
+  }
   return label;
 }
 
@@ -431,6 +664,14 @@ async function fetchProviderModels(provider) {
     return uniqueModels(models);
   }
 
+  if (provider === 'chatgpt') {
+    if (!settings.chatgptAccountId)
+      throw new Error('Connect your ChatGPT account first.');
+    const response = await chrome.runtime.sendMessage({type: 'CHATGPT_MODELS'});
+    if (!response?.ok) throw new Error(response?.error || 'Could not load ChatGPT models.');
+    return uniqueModels(response.models || []);
+  }
+
   if (settings.vaultLocked) throw new Error('Unlock your encrypted API keys first.');
   const key = settings.apiKeys[provider];
   if (!key) throw new Error(provider === 'cloudflare'
@@ -486,7 +727,7 @@ async function ensureOriginPermission(url) {
       await chrome.permissions.request({origins: [originPattern]});
     }
   } catch {
-    /* ignore incomplete URLs until finished */
+
   }
 }
 
@@ -498,7 +739,7 @@ async function fetchModelJson(url, headers, providerName, provider = '') {
     throw new Error(`Could not connect to ${providerName}. Check the URL or your connection.`);
   }
   let data = {};
-  try { data = await response.json(); } catch { /* handled below */ }
+  try { data = await response.json(); } catch {  }
   if (response.ok) return data;
   const providerError = data?.error?.message || data?.error;
   const detail = typeof providerError === 'string' ? providerError : '';

@@ -21,6 +21,7 @@ Depending on the text you select, the content may include personal communication
 Plyph supports:
 
 - Ollama
+- ChatGPT Account (sign in with your ChatGPT plan, no API key)
 - Groq
 - Cloudflare Workers AI
 - B.AI
@@ -30,6 +31,7 @@ Plyph supports:
 - Cerebras
 - OpenAI
 - Vercel AI Gateway
+- Custom OpenAI-Compatible endpoints
 
 When you run an AI action, the selected text, prompt, model information, and related request data are sent directly from the extension to the selected provider.
 
@@ -44,6 +46,10 @@ By default, API keys that you enter into Plyph are stored locally using Chrome's
 You can optionally enable API-key encryption in Settings. When enabled, Plyph encrypts API keys locally with AES-GCM using a key derived from your vault password. Only the encrypted data, salt, and initialization vector are stored in `storage.local`. After you unlock the vault, the decrypted keys and derived key are kept in Chrome's memory-only `storage.session` area and are cleared when Chrome restarts or the extension is reloaded, updated, disabled, or locked manually.
 
 Plyph cannot recover a forgotten vault password. You can reset a locked vault, which permanently deletes the saved API keys without changing other settings. Encryption is optional so you can continue using standard local storage without entering a password if you prefer.
+
+### ChatGPT sign-in
+
+If you choose the ChatGPT Account provider, Plyph opens OpenAI's sign-in page in a dedicated window. OpenAI redirects back to a loopback address that Plyph captures locally to complete the sign-in. OpenAI returns OAuth tokens directly to the extension. Plyph stores the ChatGPT connection (account identifier, email, and refresh/access tokens) locally in Chrome's `storage.local` and refreshes access tokens automatically. You can add, switch, or sign out saved accounts in Settings. Requests are sent to OpenAI's API using your shared ChatGPT allowance; available models depend on your account.
 
 Plyph restricts its local and session storage to trusted extension contexts so web-page content scripts cannot directly read it.
 
