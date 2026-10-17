@@ -15,6 +15,9 @@
   let cachedActions = [];
   let feedbackPlacement = 'bottom';
   let extensionAlive = true;
+  let actionRunning = false;
+  let dismissedSelection = null;
+  let selectingPointer = false;
 
   globalThis.__plyphController = {dispose: disposeController};
   delete globalThis.__plyphLoaded;
@@ -55,22 +58,34 @@
   } catch (error) {
     if (isContextInvalidation(error)) disposeController();
   }
-  document.addEventListener('selectionchange', scheduleTriggerUpdate, {signal: lifecycle.signal});
-  document.addEventListener('mouseup', scheduleTriggerUpdate, {signal: lifecycle.signal});
+  document.addEventListener('selectionchange', event => {
+    if (document.getElementById('plyph-host')) return;
+    dismissedSelection = null;
+    scheduleTriggerUpdate(event);
+  }, {signal: lifecycle.signal});
+  document.addEventListener('pointerup', event => { selectingPointer = false; scheduleTriggerUpdate(event); }, {signal: lifecycle.signal});
+  document.addEventListener('pointercancel', () => { selectingPointer = false; removeTrigger(true); }, {signal: lifecycle.signal});
   document.addEventListener('keyup', scheduleTriggerUpdate, {signal: lifecycle.signal});
   document.addEventListener('pointermove', event => {
     pointerPosition = {x: event.clientX, y: event.clientY};
   }, {passive: true, signal: lifecycle.signal});
   document.addEventListener('pointerdown', event => {
     pointerPosition = {x: event.clientX, y: event.clientY};
+    selectingPointer = event.button === 0;
   }, {passive: true, signal: lifecycle.signal});
   document.addEventListener('mousedown', event => {
     const trigger = document.getElementById('plyph-trigger');
-    if (trigger && !event.composedPath().includes(trigger)) removeTrigger();
+    if (trigger && !event.composedPath().includes(trigger)) removeTrigger(true);
   }, {capture: true, signal: lifecycle.signal});
-  window.addEventListener('scroll', () => removeTrigger(), {capture: true, signal: lifecycle.signal});
-  window.addEventListener('resize', () => removeTrigger(), {signal: lifecycle.signal});
+  window.addEventListener('scroll', () => removeTrigger(true), {capture: true, signal: lifecycle.signal});
+  window.addEventListener('resize', () => removeTrigger(true), {signal: lifecycle.signal});
   window.addEventListener('pagehide', () => removeTrigger(), {signal: lifecycle.signal});
+
+  window.addEventListener('blur', () => { selectingPointer = false; removeTrigger(true); }, {signal: lifecycle.signal});
+  document.addEventListener('keydown', event => {
+    if (event.composedPath().some(node => node?.id === 'plyph-trigger' || node?.id === 'plyph-host')) return;
+    removeTrigger(true);
+  }, {capture: true, signal: lifecycle.signal});
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
     if (message.type === 'PING') { sendResponse({ok: true}); return; }
@@ -80,7 +95,9 @@
       sendResponse({text: snapshot?.text || ''});
       return;
     }
-    if (message.type === 'WORKING') { removeTrigger(); showToast('Working…', 'working'); }
+    if (message.type === 'SHOW_ASK') { showAsk(message.text); sendResponse({ok: true}); return; }
+    if (message.type === 'WORKING') { actionRunning = true; removeTrigger(); showToast('Working…', 'working'); }
+    if (['SHOW_ERROR', 'SHOW_RESULT', 'REPLACE_RESULT'].includes(message.type)) actionRunning = false;
     if (message.type === 'SHOW_ERROR') showToast(message.message, 'error', 4000);
     if (message.type === 'SHOW_RESULT') showResult(message.output);
     if (message.type === 'REPLACE_RESULT') replaceSelection(message.output, message.label);
@@ -112,16 +129,18 @@
     return null;
   }
 
-  function scheduleTriggerUpdate() {
-    if (!extensionAlive) return;
+  function scheduleTriggerUpdate(event) {
+    if (!extensionAlive || event?.composedPath().some(node => node?.id === 'plyph-trigger' || node?.id === 'plyph-host')) return;
     clearTimeout(triggerTimer);
     triggerTimer = setTimeout(updateTrigger, 90);
   }
 
   function updateTrigger() {
-    if (!extensionAlive || !triggerEnabled || document.getElementById('plyph-host')) return removeTrigger();
+    if (!extensionAlive || !triggerEnabled || actionRunning || document.getElementById('plyph-host')) return removeTrigger();
+    if (selectingPointer) return;
     const current = captureSelection();
-    if (!current?.text?.trim()) return removeTrigger();
+    if (!current?.text?.trim()) { dismissedSelection = null; return removeTrigger(); }
+    if (sameSelection(current, dismissedSelection)) return removeTrigger();
     snapshot = current;
     const rect = selectionRect(current);
     if (!rect || (!rect.width && !rect.height)) return removeTrigger();
@@ -230,172 +249,102 @@
 
   function showTrigger(rect) {
     let host = document.getElementById('plyph-trigger');
-    const targetElement = snapshot?.element || (snapshot?.range?.startContainer instanceof HTMLElement ? snapshot?.range?.startContainer : snapshot?.range?.startContainer?.parentElement);
-    const isDark = getElementLuminance(targetElement) < 0.5;
-
+    const target = snapshot?.element || snapshot?.range?.startContainer?.parentElement;
+    const isDark = getElementLuminance(target) < 0.5;
     if (!host) {
       host = document.createElement('div');
       host.id = 'plyph-trigger';
       const root = host.attachShadow({mode: 'open'});
       root.innerHTML = `
         <style>
-          :host { all: initial; }
-          .wrapper {
-            display: inline-flex;
-            position: relative;
-            font-family: system-ui, -apple-system, sans-serif;
-          }
-          .wrapper.theme-light {
-            --surface: #ffffff;
-            --hover: #f1f3f7;
-            --text: #1f2328;
-            --icon-color: #1a1a1a;
-            --muted: #656d76;
-            --border: #d0d7de;
-            --shadow: 0 3px 10px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
-          }
-          .wrapper.theme-dark {
-            --surface: #21262d;
-            --hover: #30363d;
-            --text: #f0f6fc;
-            --icon-color: #ffffff;
-            --muted: #8b949e;
-            --border: #383e47;
-            --shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.25);
-          }
-          .dot {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 26px;
-            height: 26px;
-            padding: 0;
-            border: 1px solid var(--border);
-            border-radius: 50%;
-            background: var(--surface);
-            box-shadow: var(--shadow);
-            cursor: pointer;
-            transition: transform 0.12s ease, background 0.12s ease;
-            box-sizing: border-box;
-          }
-          .dot:hover, .dot[aria-expanded="true"] {
-            background: var(--hover);
-            transform: scale(1.06);
-          }
-          .dot:active {
-            transform: scale(0.96);
-          }
-          .dot-icon {
-            display: block;
-            width: 17px;
-            height: 17px;
-            pointer-events: none;
-            user-select: none;
-          }
-          .menu {
-            position: absolute;
-            top: 32px;
-            right: 0;
-            width: 220px;
-            max-width: calc(100vw - 16px);
-            padding: 5px;
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            background: var(--surface);
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-            display: flex;
-            flex-direction: column;
-            z-index: 10;
-            box-sizing: border-box;
-          }
-          .menu.align-left {
-            left: 0;
-            right: auto;
-          }
-          .menu.above {
-            top: auto;
-            bottom: 32px;
-          }
-          .menu[hidden] { display: none; }
-          .item {
-            width: 100%;
-            min-height: 29px;
-            padding: 5px 9px;
-            border: 0;
-            border-radius: 6px;
-            background: transparent;
-            color: var(--text);
-            font: 13.5px/1.35 system-ui, -apple-system, sans-serif;
-            text-align: left;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            box-sizing: border-box;
-          }
-          .item:hover, .item:focus {
-            background: var(--hover);
-            outline: 0;
-          }
-          .glyph {
-            display: flex;
-            flex: 0 0 16px;
-            width: 16px;
-            height: 16px;
-            color: var(--muted);
-          }
-          .glyph svg {
-            width: 16px;
-            height: 16px;
-            fill: none;
-            stroke: currentColor;
-            stroke-width: 1.7;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-          }
-          .glyph .filled { fill: currentColor; stroke: none; }
+          :host { all: initial; color-scheme: light dark; }
+          .wrapper { display: flex; position: relative; align-items: center; gap: 2px; padding: 3px;
+            border: 1px solid var(--border); border-radius: 18px; background: var(--surface);
+            box-shadow: 0 3px 14px #0002; font: 12px/1.4 system-ui, sans-serif; color: var(--text); }
+          .theme-light { --surface: #fff; --hover: #f0f2f5; --text: #20242b; --border: #d8dce2; --muted: #565f6c; }
+          .theme-dark { --surface: #23262c; --hover: #353a43; --text: #f4f5f7; --border: #454a54; --muted: #b8bfca; }
+          button { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px;
+            padding: 5px 7px; border: 0; border-radius: 14px; background: transparent; color: inherit;
+            font: inherit; white-space: nowrap; cursor: pointer; box-sizing: border-box; }
+          button:hover, button[aria-expanded="true"] { background: var(--hover); }
+          button:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+          .dot { width: 28px; padding: 5px; }
+          .dot svg { display: block; width: 18px; height: 18px; }
+          .quick-actions { display: flex; align-items: center; gap: 2px; border-left: 1px solid var(--border); padding-left: 3px; }
+          [hidden] { display: none !important; }
+          .glyph { display: flex; width: 16px; height: 16px; flex: 0 0 16px; }
+          .glyph svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+          .menu { position: absolute; top: calc(100% + 6px); right: 0; display: flex; flex-direction: column;
+            width: 230px; max-width: calc(100vw - 16px); max-height: min(360px, 55vh); overflow-y: auto;
+            padding: 5px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+            box-shadow: 0 6px 24px #0003; box-sizing: border-box; }
+          .menu.above { top: auto; bottom: calc(100% + 6px); }
+          .item { justify-content: flex-start; width: 100%; text-align: left; }
           .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-          .separator { height: 1px; margin: 4px 8px; background: var(--border); }
+          .separator { height: 1px; flex-shrink: 0; margin: 4px 6px; background: var(--border); }
+          @media (max-width: 420px) { .quick-label { display: none; } }
         </style>
-        <div class="wrapper ${isDark ? 'theme-dark' : 'theme-light'}">
-          <button class="dot" title="Plyph actions" aria-label="Open Plyph actions" aria-expanded="false">
-            <svg class="dot-icon" viewBox="0 0 1024 1024" role="img" aria-label="Plyph logo">
-              <path d="M 512 156 C 496 257 458 365 401 455 C 349 537 286 607 220 660 C 302 636 368 637 419 675 C 465 709 493 755 512 800 C 531 755 559 709 605 675 C 656 637 722 636 804 660 C 738 607 675 537 623 455 C 566 365 528 257 512 156 Z" fill="var(--icon-color)"/>
-              <path d="M 512 405 C 461 405 424 439 424 487 C 424 539 444 594 468 650 C 490 702 505 751 512 800 C 509 757 507 714 511 678 C 516 635 532 612 559 586 C 589 557 600 527 600 488 C 600 440 563 405 512 405 Z" fill="var(--surface)"/>
-              <circle cx="512" cy="493" r="37" fill="var(--icon-color)"/>
-            </svg>
+        <div class="wrapper" role="toolbar" aria-label="Selected text actions">
+          <button class="dot" type="button" title="Open Plyph actions" aria-label="Open Plyph actions" aria-expanded="false">
+            <svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 156C496 257 458 365 401 455C349 537 286 607 220 660C302 636 368 637 419 675C465 709 493 755 512 800C531 755 559 709 605 675C656 637 722 636 804 660C738 607 675 537 623 455C566 365 528 257 512 156Z" fill="currentColor"/><path d="M512 405C461 405 424 439 424 487C424 539 444 594 468 650C490 702 505 751 512 800C509 757 507 714 511 678C516 635 532 612 559 586C589 557 600 527 600 488C600 440 563 405 512 405Z" fill="var(--surface)"/><circle cx="512" cy="493" r="37" fill="currentColor"/></svg>
           </button>
+          <div class="quick-actions" hidden></div>
           <div class="menu" role="menu" hidden></div>
         </div>`;
-      document.documentElement.append(host);
-      const dot = root.querySelector('.dot');
-      dot.addEventListener('mousedown', event => event.preventDefault());
-      dot.addEventListener('click', () => toggleTriggerMenu(root));
-      root.addEventListener('keydown', event => { if (event.key === 'Escape') removeTrigger(); });
-    } else {
-      const wrapper = host.shadowRoot.querySelector('.wrapper');
-      if (wrapper) {
-        wrapper.className = `wrapper ${isDark ? 'theme-dark' : 'theme-light'}`;
+      const quick = root.querySelector('.quick-actions');
+      for (const action of [{name: 'Ask', mode: 'ask'}, {name: 'Correct', mode: 'correct'}, {name: 'Rewrite', mode: 'rewrite'}]) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.title = action.name; button.setAttribute('aria-label', action.name);
+        button.innerHTML = `<span class="glyph">${triggerActionIcon(action.mode)}</span><span class="quick-label">${action.name}</span>`;
+        button.addEventListener('click', () => runPageAction(action));
+        quick.append(button);
       }
+      const more = document.createElement('button');
+      more.type = 'button'; more.title = 'More actions'; more.setAttribute('aria-label', 'More actions');
+      more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+      more.className = 'more'; more.innerHTML = `<span class="glyph">${triggerActionIcon('more')}</span>`;
+      more.addEventListener('click', () => toggleTriggerMenu(root));
+      quick.append(more);
+      document.documentElement.append(host);
+      root.addEventListener('mousedown', event => event.preventDefault());
+      const dot = root.querySelector('.dot');
+      dot.addEventListener('click', () => {
+        quick.hidden = !quick.hidden;
+        dot.setAttribute('aria-expanded', String(!quick.hidden));
+        dot.title = quick.hidden ? 'Open Plyph actions' : 'Collapse Plyph actions';
+        dot.setAttribute('aria-label', dot.title);
+        root.querySelector('.menu').hidden = true;
+        more.setAttribute('aria-expanded', 'false');
+        positionTrigger(host, host._plyphSelectionRect);
+      });
+      root.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); removeTrigger(true); }
+        if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+          const buttons = [...root.querySelectorAll('button')].filter(button => !button.closest('[hidden]'));
+          const index = buttons.indexOf(root.activeElement);
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+            : (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1) + buttons.length) % buttons.length;
+          event.preventDefault(); buttons[next]?.focus();
+        }
+      });
     }
-    const x = Math.min(window.innerWidth - 32, Math.max(6, rect.right + 5));
-    const y = Math.min(window.innerHeight - 32, Math.max(6, rect.bottom + 5));
-    host.style.setProperty('position', 'fixed', 'important');
-    host.style.setProperty('z-index', '2147483646', 'important');
-    host.style.setProperty('left', `${x}px`, 'important');
-    host.style.setProperty('top', `${y}px`, 'important');
-    updateMenuPosition(host.shadowRoot?.querySelector('.menu'), x, y);
+    host._plyphSelectionRect = rect;
+    host.shadowRoot.querySelector('.wrapper').className = `wrapper ${isDark ? 'theme-dark' : 'theme-light'}`;
+    positionTrigger(host, rect);
   }
 
-  function updateMenuPosition(menu, x, y) {
-    if (!menu) return;
-    const MENU_WIDTH = 220;
-    const MENU_HEIGHT = 260;
-    menu.classList.toggle('align-left', x < MENU_WIDTH);
-    menu.classList.toggle('above', y > window.innerHeight - MENU_HEIGHT);
+  function positionTrigger(host, rect) {
+    host.style.setProperty('position', 'fixed', 'important');
+    host.style.setProperty('z-index', '2147483646', 'important');
+    const width = host.shadowRoot.querySelector('.wrapper').getBoundingClientRect().width;
+    const x = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right + 5));
+    const y = Math.max(8, Math.min(window.innerHeight - 50, rect.bottom + 6));
+    host.style.setProperty('left', `${x}px`, 'important');
+    host.style.setProperty('top', `${y}px`, 'important');
+    const menu = host.shadowRoot.querySelector('.menu');
+    menu.style.right = 'auto';
+    menu.style.left = `${Math.min(0, window.innerWidth - x - 246)}px`;
+    menu.classList.toggle('above', y > window.innerHeight / 2);
   }
 
   function enabledCustomActions(actions) {
@@ -415,69 +364,154 @@
   function toggleTriggerMenu(root) {
     if (!extensionAlive || !hasExtensionContext()) return removeTrigger();
     const menu = root.querySelector('.menu');
-    const dot = root.querySelector('.dot');
-    if (!menu.hidden) { menu.hidden = true; dot.setAttribute('aria-expanded', 'false'); return; }
-    const host = document.getElementById('plyph-trigger');
-    const x = parseFloat(host?.style.left) || 0;
-    const y = parseFloat(host?.style.top) || 0;
-    updateMenuPosition(menu, x, y);
+    const more = root.querySelector('.more');
+    if (!menu.hidden) { menu.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
     const actions = [
-      {name: 'Correct selected text', mode: 'correct'},
-      {name: 'Rewrite selected text', mode: 'rewrite'},
       {name: 'Run selected prompt', mode: 'prompt'},
       ...cachedActions.map(action => ({name: action.name, mode: 'custom', actionId: action.id})),
     ];
     menu.replaceChildren();
     actions.forEach((action, index) => {
-      if (index === 3) { const separator = document.createElement('div'); separator.className = 'separator'; menu.append(separator); }
+      if (index === 1) { const separator = document.createElement('div'); separator.className = 'separator'; menu.append(separator); }
       const button = document.createElement('button');
       button.className = 'item'; button.type = 'button'; button.setAttribute('role', 'menuitem');
-      button.innerHTML = `<span class="glyph" aria-hidden="true">${triggerActionIcon(action.mode)}</span><span class="label"></span>`;
+      button.innerHTML = `<span class="glyph">${triggerActionIcon(action.mode)}</span><span class="label"></span>`;
       button.querySelector('.label').textContent = action.name;
-      button.addEventListener('mousedown', event => event.preventDefault());
-      button.addEventListener('click', () => {
-        if (!extensionAlive || !hasExtensionContext()) return removeTrigger();
-        menu.hidden = true;
-        dot.setAttribute('aria-expanded', 'false');
-        try {
-          chrome.runtime.sendMessage({
-            type: 'RUN_ACTION_FROM_PAGE',
-            action,
-            text: snapshot?.text || '',
-          }, response => {
-            try {
-              if (chrome.runtime.lastError) {
-                removeTrigger();
-                return;
-              }
-              if (!extensionAlive) return;
-              if (!response?.ok)
-                showToast(response?.error || 'Could not run this action.', 'error', 4000);
-            } catch (error) {
-              if (isContextInvalidation(error)) disposeController();
-              removeTrigger();
-            }
-          });
-        } catch {
-          removeTrigger();
-        }
-      });
+      button.addEventListener('click', () => runPageAction(action));
       menu.append(button);
     });
     menu.hidden = false;
-    dot.setAttribute('aria-expanded', 'true');
+    more.setAttribute('aria-expanded', 'true');
+    menu.querySelector('button')?.focus();
+  }
+
+  function runPageAction(action, selectedText = snapshot?.text || '') {
+    if (!extensionAlive || !hasExtensionContext()) return removeTrigger();
+    if (action.mode === 'ask' && !action.instruction) { showAsk(snapshot?.text || ''); return; }
+    removeTrigger(true);
+    actionRunning = true;
+    try {
+      chrome.runtime.sendMessage({type: 'RUN_ACTION_FROM_PAGE', action, text: selectedText}, response => {
+        try {
+          if (chrome.runtime.lastError) {
+            actionRunning = false;
+            showToast(chrome.runtime.lastError.message || 'Reload this page to reconnect Plyph.', 'error', 4000);
+            return;
+          }
+          if (!extensionAlive) return;
+          actionRunning = false;
+          if (!response?.ok) showToast(response?.error || 'Could not run this action.', 'error', 4000);
+        } catch (error) {
+          actionRunning = false;
+          if (isContextInvalidation(error)) disposeController();
+        }
+      });
+    } catch (error) {
+      actionRunning = false;
+      if (isContextInvalidation(error)) disposeController();
+      else showToast(error.message || 'Could not run this action.', 'error', 4000);
+    }
   }
 
   function triggerActionIcon(mode) {
-    if (mode === 'correct') return '<svg viewBox="0 0 20 20"><path d="m4 10 3.2 3.2L16 4.8"/></svg>';
-    if (mode === 'rewrite') return '<svg viewBox="0 0 20 20"><path d="M15.5 7A6 6 0 1 0 16 12"/><path d="M12 3h4v4"/></svg>';
-    if (mode === 'prompt') return '<svg viewBox="0 0 20 20"><path class="filled" d="m7 4 8 6-8 6Z"/></svg>';
-    return '<svg viewBox="0 0 20 20"><path d="m10 2 1.5 5.1L16.5 9l-5 1.9L10 16l-1.5-5.1L3.5 9l5-1.9Z"/></svg>';
+    const paths = {
+      ask: '<path d="M17 9a6.5 6.5 0 0 1-6.5 6.5H7L3 18V6a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3Z"/><path d="M6.5 7h7M6.5 10.5H11"/>',
+      correct: '<path d="m2.5 12 3.5-9 3.5 9M4 8.5h4M11 13l2.5 2.5 4-5"/>',
+      rewrite: '<path d="m12.5 3.5 4 4M3 17l4.5-1 10-10a1.5 1.5 0 0 0 0-2l-1.5-1.5a1.5 1.5 0 0 0-2 0l-10 10Z"/><path d="M11 17h6"/>',
+      prompt: '<path d="m6 3 10 7-10 7Z"/>',
+      more: '<circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/>',
+      custom: '<path d="M3 5h5m4 0h5M3 10h9m4 0h1M3 15h2m4 0h8M8 3v4m4 1v4M5 13v4"/>',
+    };
+    return `<svg viewBox="0 0 20 20" aria-hidden="true">${paths[mode] || paths.custom}</svg>`;
   }
 
-  function removeTrigger() {
+  function sameSelection(a, b) {
+    if (!a || !b || a.kind !== b.kind || a.text !== b.text) return false;
+    if (a.kind === 'control') return a.element === b.element && a.start === b.start && a.end === b.end;
+    return a.range.startContainer === b.range.startContainer && a.range.startOffset === b.range.startOffset &&
+      a.range.endContainer === b.range.endContainer && a.range.endOffset === b.range.endOffset;
+  }
+
+  function removeTrigger(suppress = false) {
     clearTimeout(triggerTimer);
+    if (suppress) dismissedSelection = snapshot;
     document.getElementById('plyph-trigger')?.remove();
+  }
+
+  function showAsk(text) {
+    if (!text?.trim()) { showToast('Select text first.', 'error', 3000); return; }
+    const originalSelection = snapshot;
+    const originalFocus = document.activeElement;
+    removeTrigger(true);
+    removeToast();
+    closeDialog();
+    const host = document.createElement('div');
+    host.id = 'plyph-host';
+    const root = host.attachShadow({mode: 'open'});
+    root.innerHTML = `
+      <style>
+        :host { all: initial; color-scheme: light dark; }
+        dialog { width: min(480px, calc(100vw - 40px)); max-height: calc(100vh - 48px); overflow: auto;
+          box-sizing: border-box; padding: 24px; border: 1px solid #d8dce2; border-radius: 16px;
+          background: #fff; color: #20242b; box-shadow: 0 18px 60px #0004; font: 14px/1.5 system-ui, sans-serif; }
+        dialog::backdrop { background: #0005; }
+        form { display: flex; flex-direction: column; gap: 16px; margin: 0; }
+        h2 { margin: 0; font-size: 20px; font-weight: 600; }
+        label { display: flex; flex-direction: column; gap: 8px; }
+        textarea { width: 100%; min-height: 108px; resize: vertical; padding: 12px; box-sizing: border-box;
+          border: 1px solid #bbc2cc; border-radius: 8px; background: #f8f9fb; color: inherit; font: inherit; }
+        textarea:focus { outline: 2px solid #626e80; outline-offset: 2px; }
+        details { padding: 10px 12px; border: 1px solid #e0e3e8; border-radius: 8px; }
+        summary { cursor: pointer; color: #616b79; }
+        .selection { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; }
+        footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+        button { min-height: 36px; padding: 7px 15px; border: 1px solid #d8dce2; border-radius: 8px;
+          background: #f1f3f6; color: inherit; font: inherit; cursor: pointer; }
+        button[type=submit] { background: #252b35; border-color: #252b35; color: #fff; }
+        button:disabled { opacity: .5; cursor: default; }
+        button:focus-visible { outline: 2px solid #626e80; outline-offset: 2px; }
+        @media (prefers-color-scheme: dark) {
+          dialog { background: #23262c; color: #f4f5f7; border-color: #454a54; }
+          textarea { background: #191c21; border-color: #545b67; }
+          details, button { border-color: #454a54; }
+          summary { color: #b8bfca; }
+          button { background: #353a43; }
+          button[type=submit] { background: #e1e5ec; color: #20242b; border-color: #e1e5ec; }
+        }
+      </style>
+      <dialog aria-labelledby="ask-title">
+        <form><h2 id="ask-title">Ask Plyph</h2>
+          <details><summary>Selected text</summary><p class="selection"></p></details>
+          <label>What would you like to do?<textarea placeholder="Explain this, shorten it, change the tone…" required autofocus></textarea></label>
+          <footer><button type="button" class="cancel">Cancel</button><button type="submit" disabled>Send</button></footer>
+        </form>
+      </dialog>`;
+    root.querySelector('.selection').textContent = text;
+    document.documentElement.append(host);
+    const dialog = root.querySelector('dialog');
+    const field = root.querySelector('textarea');
+    const submit = root.querySelector('button[type=submit]');
+    const cancel = () => { closeDialog(); if (originalFocus?.isConnected) originalFocus.focus({preventScroll: true}); };
+    field.addEventListener('input', () => { submit.disabled = !field.value.trim(); });
+    root.querySelector('.cancel').addEventListener('click', cancel);
+    dialog.addEventListener('cancel', event => { event.preventDefault(); cancel(); });
+    root.querySelector('form').addEventListener('submit', event => {
+      event.preventDefault();
+      const instruction = field.value.trim();
+      if (!instruction) return;
+      snapshot = originalSelection;
+      closeDialog();
+      runPageAction({mode: 'ask', instruction}, text);
+    });
+    root.addEventListener('keydown', event => {
+      event.stopPropagation();
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        if (field.value.trim()) root.querySelector('form').requestSubmit();
+      }
+    });
+    dialog.showModal();
+    field.focus();
   }
 
   function replaceSelection(text, label = 'Replaced') {

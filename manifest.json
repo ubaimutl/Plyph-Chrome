@@ -2,9 +2,15 @@
   "manifest_version": 3,
   "minimum_chrome_version": "102",
   "name": "Plyph",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Use AI to correct, rewrite, or transform selected text in Chrome.",
-  "permissions": ["activeTab", "contextMenus", "scripting", "storage", "declarativeNetRequestWithHostAccess"],
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "scripting",
+    "storage",
+    "declarativeNetRequestWithHostAccess"
+  ],
   "host_permissions": [
     "https://api.groq.com/*",
     "https://api.cloudflare.com/*",
@@ -26,29 +32,66 @@
     "https://*/*",
     "http://*/*"
   ],
-  "background": {"service_worker": "background.js", "type": "module"},
-  "content_scripts": [{
-    "matches": ["<all_urls>"],
-    "js": ["page-controller.js"],
-    "run_at": "document_idle"
-  }],
-  "web_accessible_resources": [{
-    "resources": [
-      "toolbar/*",
-      "icons/*"
-    ],
-    "matches": ["<all_urls>"]
-  }],
-  "icons": {"16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png"},
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "page-controller.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "toolbar/*",
+        "icons/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
     "default_title": "Plyph",
     "default_popup": "popup.html",
-    "default_icon": {"16": "toolbar/icon16.png", "24": "toolbar/icon24.png", "32": "toolbar/icon32.png"}
+    "default_icon": {
+      "16": "toolbar/icon16.png",
+      "24": "toolbar/icon24.png",
+      "32": "toolbar/icon32.png"
+    }
   },
   "options_page": "options.html",
   "commands": {
-    "correct": {"suggested_key": {"default": "Alt+Shift+C"}, "description": "Correct selected text"},
-    "rewrite": {"suggested_key": {"default": "Alt+Shift+R"}, "description": "Rewrite selected text"},
-    "run-prompt": {"description": "Run selected text as a prompt"}
+    "correct": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Correct selected text"
+    },
+    "rewrite": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "Rewrite selected text"
+    },
+    "run-prompt": {
+      "description": "Run selected text as a prompt"
+    },
+    "ask": {
+      "description": "Ask about selected text"
+    }
   }
 }

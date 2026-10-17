@@ -55,7 +55,7 @@ Install directly from the [**Chrome Web Store**](https://chromewebstore.google.c
 
 1. **Select any text** on a webpage or inside an editable field (`<input>`, `<textarea>`, contenteditable).
 2. **Choose an action** from:
-   - The floating action dot beside the selection
+   - The floating toolbar beside the selection (Ask, Correct, Rewrite, and More)
    - Right-click context menu (**Plyph → Action**)
    - Toolbar popup icon
    - Keyboard shortcuts (`Alt+Shift+C` to correct, `Alt+Shift+R` to rewrite)
@@ -82,3 +82,7 @@ Install directly from the [**Chrome Web Store**](https://chromewebstore.google.c
 - **Local Storage**: API keys are saved locally in Chrome's `storage.local`. Optional password encryption keeps unlocked keys in memory-only `storage.session` until the browser closes.
 - **Local AI Support**: When using a locally running Ollama or localhost server, your data never leaves your machine.
 - **No Telemetry**: Plyph contains zero analytics, tracking scripts, or background telemetry.
+
+### Ask about selected text
+
+Select text, open the floating toolbar, and choose **Ask**. Enter an instruction or question and press **Send** (or Ctrl/Cmd+Enter). Ask is also available in the extension popup, right-click menu, and Chrome shortcut settings. It uses your active provider and existing result-preview setting.
