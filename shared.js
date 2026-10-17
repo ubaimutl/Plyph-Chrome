@@ -13,6 +13,38 @@ export const PROVIDERS = [
   {id: 'custom_openai', name: 'Custom OpenAI-Compatible'},
 ];
 
+export const TOOLBAR_BUILTINS = [
+  {id: 'ask', name: 'Ask', mode: 'ask'},
+  {id: 'correct', name: 'Correct', mode: 'correct'},
+  {id: 'rewrite', name: 'Rewrite', mode: 'rewrite'},
+  {id: 'prompt', name: 'Run selected prompt', mode: 'prompt'},
+];
+
+export const TOOLBAR_LIMIT = 4;
+
+export const DEFAULT_TOOLBAR_ACTIONS = ['ask', 'correct', 'rewrite', 'prompt'];
+
+export function normalizeToolbarActions(value, customActions = []) {
+  if (!Array.isArray(value) || !value.length) return [...DEFAULT_TOOLBAR_ACTIONS];
+  const known = new Set([
+    ...TOOLBAR_BUILTINS.map(item => item.id),
+    ...(Array.isArray(customActions) ? customActions : []).map(action => action?.id).filter(Boolean),
+  ]);
+  return value.filter(id => typeof id === 'string' && known.has(id)).slice(0, TOOLBAR_LIMIT);
+}
+
+export function resolveToolbarActions(ids, customActions = []) {
+  const enabled = (Array.isArray(customActions) ? customActions : [])
+    .filter(action => action?.enabled !== false && action?.name?.trim());
+  return (Array.isArray(ids) ? ids : []).slice(0, TOOLBAR_LIMIT).map(id => {
+    const builtin = TOOLBAR_BUILTINS.find(item => item.id === id);
+    if (builtin) return {id, name: builtin.name, mode: builtin.mode};
+    const custom = enabled.find(action => action.id === id);
+    if (custom) return {id, name: custom.name, mode: 'custom', actionId: custom.id};
+    return null;
+  });
+}
+
 export const DEFAULT_ACTIONS = [
   {
     id: 'default-professional-email',
@@ -67,7 +99,9 @@ export const DEFAULTS = {
   variables: {language: 'English', tone: 'professional', style: 'clear and concise'},
   promptOptions: {provider: '', model: '', inputLimit: 0, outputLimit: 0, outputFormat: 'auto'},
   customActions: DEFAULT_ACTIONS,
+  toolbarActions: [...DEFAULT_TOOLBAR_ACTIONS],
   previewResults: true,
+  previewShowChanges: false,
   selectionTrigger: true,
 
   historyEnabled: false,
@@ -217,6 +251,7 @@ export async function getSettings() {
   return {
     ...DEFAULTS, ...saved,
     models: {...DEFAULTS.models, ...(saved.models || {})},
+    toolbarActions: normalizeToolbarActions(saved.toolbarActions, saved.customActions),
     apiKeys,
     vaultLocked,
     prompts: {...DEFAULTS.prompts, ...(saved.prompts || {})},

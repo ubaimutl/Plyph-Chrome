@@ -249,6 +249,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
   if (
     changes.customActions ||
+    changes.toolbarActions ||
     changes.selectionTrigger ||
     changes.feedbackPlacement
   ) {
@@ -268,6 +269,7 @@ async function broadcastPageConfig() {
         chrome.tabs.sendMessage(tab.id, {
           type: "SET_PAGE_CONFIG",
           customActions: settings.customActions,
+          toolbarActions: settings.toolbarActions,
           selectionTrigger: settings.selectionTrigger,
           feedbackPlacement: settings.feedbackPlacement,
         }),

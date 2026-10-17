@@ -1,7 +1,7 @@
 (() => {
   const previousController = globalThis.__plyphController;
   if (previousController?.dispose) {
-    try { previousController.dispose(); } catch { /* The previous extension context may already be gone. */ }
+    try { previousController.dispose(); } catch {  }
   }
 
   const lifecycle = new AbortController();
@@ -13,6 +13,7 @@
   let triggerEnabled = true;
   let triggerTimer = null;
   let cachedActions = [];
+  let toolbarActionIds = ['ask', 'correct', 'rewrite', 'prompt'];
   let feedbackPlacement = 'bottom';
   let extensionAlive = true;
   let actionRunning = false;
@@ -33,7 +34,7 @@
     clearTimeout(triggerTimer);
     clearTimeout(toastTimer);
     lifecycle.abort();
-    try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch { /* Context already invalidated. */ }
+    try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {  }
     removeTrigger();
     closeDialog();
     removeToast();
@@ -43,14 +44,20 @@
     if (!isContextInvalidation(event.reason)) return;
     event.preventDefault();
     disposeController();
-  }, {signal: lifecycle.signal});
+  }, {signal: lifecycle.signal});  function applyPageConfig(values) {
+    if (Array.isArray(values.toolbarActions) && values.toolbarActions.length)
+      toolbarActionIds = values.toolbarActions.filter(id => typeof id === 'string').slice(0, 4);
+    cachedActions = enabledCustomActions(values.customActions);
+    const host = document.getElementById('plyph-trigger');
+    if (host?.shadowRoot) renderQuickActions(host.shadowRoot);
+  }
 
   try {
     chrome.runtime.sendMessage({type: 'GET_PAGE_CONFIG'}).then(values => {
       if (!extensionAlive) return;
       triggerEnabled = values.selectionTrigger !== false;
       feedbackPlacement = values.feedbackPlacement || 'bottom';
-      cachedActions = enabledCustomActions(values.customActions);
+      applyPageConfig(values);
       if (triggerEnabled) scheduleTriggerUpdate();
     }).catch(error => {
       if (isContextInvalidation(error)) disposeController();
@@ -98,11 +105,11 @@
     if (message.type === 'SHOW_ASK') { showAsk(message.text); sendResponse({ok: true}); return; }
     if (message.type === 'WORKING') { actionRunning = true; removeTrigger(); showToast('Working…', 'working'); }
     if (['SHOW_ERROR', 'SHOW_RESULT', 'REPLACE_RESULT'].includes(message.type)) actionRunning = false;
-    if (message.type === 'SHOW_ERROR') showToast(message.message, 'error', 4000);
-    if (message.type === 'SHOW_RESULT') showResult(message.output);
+    if (message.type === 'SHOW_ERROR') showErrorDialog(message.message);
+    if (message.type === 'SHOW_RESULT') showResult(message.output, message.original, message.showChanges);
     if (message.type === 'REPLACE_RESULT') replaceSelection(message.output, message.label);
     if (message.type === 'SET_PAGE_CONFIG') {
-      cachedActions = enabledCustomActions(message.customActions);
+      applyPageConfig(message);
       triggerEnabled = message.selectionTrigger !== false;
       feedbackPlacement = message.feedbackPlacement || 'bottom';
       if (triggerEnabled) scheduleTriggerUpdate(); else removeTrigger();
@@ -247,6 +254,46 @@
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 0.1 : 0.9;
   }
 
+  function resolveQuickActions() {
+    const builtins = {
+      ask: {name: 'Ask', mode: 'ask'},
+      correct: {name: 'Correct', mode: 'correct'},
+      rewrite: {name: 'Rewrite', mode: 'rewrite'},
+      prompt: {name: 'Run Prompt', mode: 'prompt'},
+    };
+    const resolved = [];
+    for (const id of toolbarActionIds.slice(0, 4)) {
+      if (builtins[id]) { resolved.push({name: builtins[id].name, mode: builtins[id].mode}); continue; }
+      const custom = cachedActions.find(action => action.id === id);
+      if (custom) resolved.push({name: custom.name, mode: 'custom', actionId: custom.id});
+    }
+    return resolved;
+  }
+
+  function renderQuickActions(root) {
+    const quick = root.querySelector('.quick-actions');
+    if (!quick) return;
+    quick.replaceChildren();
+    for (const action of resolveQuickActions()) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.title = action.name; button.setAttribute('aria-label', action.name);
+      button.innerHTML = `<span class="glyph">${triggerActionIcon(action.mode)}</span><span class="quick-label"></span>`;
+      button.querySelector('.quick-label').textContent = action.name;
+      button.addEventListener('click', () => runPageAction(action));
+      quick.append(button);
+    }
+    const more = document.createElement('button');
+    more.type = 'button'; more.title = 'More actions'; more.setAttribute('aria-label', 'More actions');
+    more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+    more.className = 'more'; more.innerHTML = `<span class="glyph">${triggerActionIcon('more')}</span>`;
+    more.addEventListener('click', event => { event.stopPropagation(); toggleTriggerMenu(root); });
+
+    more.hidden = overflowActions().length === 0;
+    quick.append(more);
+    const menu = root.querySelector('.menu');
+    if (menu) { menu.hidden = true; }
+  }
+
   function showTrigger(rect) {
     let host = document.getElementById('plyph-trigger');
     const target = snapshot?.element || snapshot?.range?.startContainer?.parentElement;
@@ -291,30 +338,18 @@
           <div class="quick-actions" hidden></div>
           <div class="menu" role="menu" hidden></div>
         </div>`;
-      const quick = root.querySelector('.quick-actions');
-      for (const action of [{name: 'Ask', mode: 'ask'}, {name: 'Correct', mode: 'correct'}, {name: 'Rewrite', mode: 'rewrite'}]) {
-        const button = document.createElement('button');
-        button.type = 'button'; button.title = action.name; button.setAttribute('aria-label', action.name);
-        button.innerHTML = `<span class="glyph">${triggerActionIcon(action.mode)}</span><span class="quick-label">${action.name}</span>`;
-        button.addEventListener('click', () => runPageAction(action));
-        quick.append(button);
-      }
-      const more = document.createElement('button');
-      more.type = 'button'; more.title = 'More actions'; more.setAttribute('aria-label', 'More actions');
-      more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
-      more.className = 'more'; more.innerHTML = `<span class="glyph">${triggerActionIcon('more')}</span>`;
-      more.addEventListener('click', () => toggleTriggerMenu(root));
-      quick.append(more);
+      renderQuickActions(root);
       document.documentElement.append(host);
       root.addEventListener('mousedown', event => event.preventDefault());
       const dot = root.querySelector('.dot');
       dot.addEventListener('click', () => {
+        const quick = root.querySelector('.quick-actions');
         quick.hidden = !quick.hidden;
         dot.setAttribute('aria-expanded', String(!quick.hidden));
         dot.title = quick.hidden ? 'Open Plyph actions' : 'Collapse Plyph actions';
         dot.setAttribute('aria-label', dot.title);
         root.querySelector('.menu').hidden = true;
-        more.setAttribute('aria-expanded', 'false');
+        root.querySelector('.more')?.setAttribute('aria-expanded', 'false');
         positionTrigger(host, host._plyphSelectionRect);
       });
       root.addEventListener('keydown', event => {
@@ -366,11 +401,9 @@
     const menu = root.querySelector('.menu');
     const more = root.querySelector('.more');
     if (!menu.hidden) { menu.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
-    const actions = [
-      {name: 'Run selected prompt', mode: 'prompt'},
-      ...cachedActions.map(action => ({name: action.name, mode: 'custom', actionId: action.id})),
-    ];
+    const actions = overflowActions();
     menu.replaceChildren();
+    if (!actions.length) { menu.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
     actions.forEach((action, index) => {
       if (index === 1) { const separator = document.createElement('div'); separator.className = 'separator'; menu.append(separator); }
       const button = document.createElement('button');
@@ -411,6 +444,22 @@
       if (isContextInvalidation(error)) disposeController();
       else showToast(error.message || 'Could not run this action.', 'error', 4000);
     }
+  }
+
+  function overflowActions() {
+    const quickIds = new Set(toolbarActionIds);
+    const builtins = [
+      {id: 'ask', name: 'Ask', mode: 'ask'},
+      {id: 'correct', name: 'Correct', mode: 'correct'},
+      {id: 'rewrite', name: 'Rewrite', mode: 'rewrite'},
+      {id: 'prompt', name: 'Run selected prompt', mode: 'prompt'},
+    ];
+    return [
+      ...builtins.filter(item => !quickIds.has(item.id)),
+      ...cachedActions
+        .filter(action => !quickIds.has(action.id))
+        .map(action => ({name: action.name, mode: 'custom', actionId: action.id})),
+    ];
   }
 
   function triggerActionIcon(mode) {
@@ -823,7 +872,7 @@
               </svg>
             </button>
           </header>
-          
+
           <div class="card">
             <div class="card-header">
               <button class="btn-card-action btn-wrap active" type="button" title="Toggle line wrapping">wrap</button>
@@ -869,7 +918,7 @@
       wrapBtn.classList.toggle('active', isWrapped);
       wrapBtn.title = isWrapped ? 'Disable line wrapping' : 'Enable line wrapping';
     });
-    
+
     const stripButton = root.querySelector('.strip-md');
     if (stripButton) {
       stripButton.addEventListener('click', () => {
@@ -888,7 +937,7 @@
     }
 
     root.querySelector('.cancel')?.addEventListener('click', closeDialog);
-    
+
     const copyButton = root.querySelector('.copy');
     copyButton?.addEventListener('click', () => {
       copyResult(textarea)
@@ -904,7 +953,7 @@
     });
 
     root.querySelector('.replace')?.addEventListener('click', () => replaceSelection(textarea.value));
-    
+
     let backdropMouseDownTarget = null;
     const backdrop = root.querySelector('.backdrop');
     backdrop?.addEventListener('mousedown', event => {
@@ -937,7 +986,7 @@
       try {
         await navigator.clipboard.writeText(textarea.value);
         return;
-      } catch { /* HTTP pages need the user-activated fallback below. */ }
+      } catch {  }
     }
     textarea.focus();
     textarea.select();
@@ -1023,41 +1072,30 @@
     let output = String(text || '');
     if (!output) return '';
 
-    // 1. Fenced code blocks -> preserve code content
     output = output.replace(/^```[a-z0-9_-]*\s*\n?([\s\S]*?)\n?```$/gm, '$1');
 
-    // 2. Inline code `code` -> code
     output = output.replace(/`([^`\n]+)`/g, '$1');
 
-    // 3. Markdown links [text](url) -> text
     output = output.replace(/\[([^\]\n]+)\]\((?:https?:\/\/[^\s\)]+|#[^\s\)]+)\)/g, '$1');
 
-    // 4. Images ![alt](url) -> alt
     output = output.replace(/!\[([^\]\n]*)\]\([^\s\)]+\)/g, '$1');
 
-    // 5. ATX Headings # Title -> Title
     output = output.replace(/^(?:#{1,6})\s+(.+)$/gm, '$1');
 
-    // 6. Blockquotes > text -> text
     output = output.replace(/^>\s+(.+)$/gm, '$1');
 
-    // 7. Table separator lines |---|---| -> remove
     output = output.replace(/^\|(?:\s*:?-+:?\s*\|)+\s*$/gm, '');
 
-    // 8. Table cell borders | cell | cell | -> cell   cell
     output = output.replace(/^\|\s*(.+?)\s*\|$/gm, (_m, row) => {
       return row.split('|').map(c => c.trim()).filter(Boolean).join('   ');
     });
 
-    // 9. Word-bounded Bold **text** and __text__
     output = output.replace(/(?<=^|\s)\*\*([^*\n]+?)\*\*(?=\s|[.,!?;:)]|$)/g, '$1');
     output = output.replace(/(?<=^|\s)__([^_\n]+?)__(?=\s|[.,!?;:)]|$)/g, '$1');
 
-    // 10. Word-bounded Italic *text* and _text_ (strictly avoiding snake_case_variables)
     output = output.replace(/(?<=^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:)]|$)/g, '$1');
     output = output.replace(/(?<=^|\s)_([^_\n]+?)_(?=\s|[.,!?;:)]|$)/g, '$1');
 
-    // 11. Strikethrough ~~text~~
     output = output.replace(/(?<=^|\s)~~([^~\n]+?)~~(?=\s|[.,!?;:)]|$)/g, '$1');
 
     return output.trim();

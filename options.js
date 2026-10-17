@@ -1,9 +1,12 @@
 import {
   PROVIDERS,
+  TOOLBAR_BUILTINS,
+  TOOLBAR_LIMIT,
   disableApiKeyVault,
   enableApiKeyVault,
   getSettings,
   lockApiKeyVault,
+  normalizeToolbarActions,
   resetApiKeyVault,
   saveSettings,
   unlockApiKeyVault,
@@ -40,6 +43,14 @@ $('#run-output-format').value = settings.promptOptions.outputFormat || 'auto';
 renderVaultState();
 renderProviderFields();
 renderActions();
+renderToolbarActions();
+$('#toolbar-add-btn').addEventListener('click', () => {
+  const id = $('#toolbar-add').value;
+  if (!id || settings.toolbarActions.includes(id) || settings.toolbarActions.length >= TOOLBAR_LIMIT) return;
+  settings.toolbarActions = normalizeToolbarActions([...settings.toolbarActions, id], settings.customActions);
+  queueSave();
+  renderToolbarActions();
+});
 
 document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
   document.querySelectorAll('.tab,.page').forEach(item => item.classList.remove('active'));
@@ -765,6 +776,103 @@ function field(labelText, value, secret, onInput, disabled = false, placeholder 
   if (disabled) input.placeholder = 'Unlock encrypted API keys below';
   else if (placeholder) input.placeholder = placeholder;
   input.addEventListener('input', () => onInput(input.value)); label.append(input); return label;
+}
+
+function toolbarIcon(id) {
+  const paths = {
+    ask: '<path d="M5 3.5h14A1.5 1.5 0 0 1 20.5 5v11a1.5 1.5 0 0 1-1.5 1.5h-7L7 21v-3.5H5A1.5 1.5 0 0 1 3.5 16V5A1.5 1.5 0 0 1 5 3.5Z"/><path d="M9.8 8a2.2 2.2 0 1 1 3.6 1.7c-.9.6-1.4 1-1.4 2"/><circle cx="12" cy="14.5" r=".7" fill="currentColor" stroke="none"/>',
+    correct: '<path d="m8.5 10.5 11 11 2-2-11-11Z"/><path d="m11 13 2-2M5 2v4M3 4h4M16 2v4M14 4h4M3 12v4M1 14h4"/>',
+    rewrite: '<path d="M10 5H5a1 1 0 0 0-1 1v14h14v-6M11 13l1-4L19 2l3 3-7 7ZM17 4l3 3"/>',
+    prompt: '<path d="M6 3.5a.7.7 0 0 1 1.1-.6l14 8.5a.7.7 0 0 1 0 1.2l-14 8.5a.7.7 0 0 1-1.1-.6Z" fill="currentColor" stroke="none"/>',
+    more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+  };
+  const inner = paths[id] || '<path d="m10 4 2.3 6.7L19 13l-6.7 2.3L10 22l-2.3-6.7L1 13l6.7-2.3ZM19 1l1.1 3.9L24 6l-3.9 1.1L19 11l-1.1-3.9L14 6l3.9-1.1Z"/>';
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+}
+
+function toolbarCandidates() {
+  const customs = (settings.customActions || [])
+    .filter(action => action.enabled !== false && action.name?.trim());
+  return [
+    ...TOOLBAR_BUILTINS.map(item => ({id: item.id, name: item.name})),
+    ...customs.map(action => ({id: action.id, name: action.name})),
+  ];
+}
+
+function renderToolbarActions() {
+  settings.toolbarActions = normalizeToolbarActions(settings.toolbarActions, settings.customActions);
+  const root = $('#toolbar-list');
+  root.replaceChildren();
+  const candidates = toolbarCandidates();
+  const byId = new Map(candidates.map(item => [item.id, item.name]));
+  const visible = settings.toolbarActions.filter(id => byId.has(id));
+  const preview = $('#toolbar-preview');
+  preview.replaceChildren();
+  const dot = document.createElement('span');
+  dot.className = 'tp-dot';
+  dot.title = 'Plyph button';
+  dot.innerHTML = '<svg viewBox="0 0 1024 1024" aria-hidden="true"><g transform="translate(512 512) scale(1.32) translate(-512 -478)"><path d="M512 156C496 257 458 365 401 455C349 537 286 607 220 660C302 636 368 637 419 675C465 709 493 755 512 800C531 755 559 709 605 675C656 637 722 636 804 660C738 607 675 537 623 455C566 365 528 257 512 156Z" fill="#f7f7f7" stroke="#111316" stroke-width="64" stroke-linejoin="round" paint-order="stroke fill"/><path d="M512 405C461 405 424 439 424 487C424 539 444 594 468 650C490 702 505 751 512 800C509 757 507 714 511 678C516 635 532 612 559 586C589 557 600 527 600 488C600 440 563 405 512 405Z" fill="#111316"/><circle cx="512" cy="493" r="38" fill="#f7f7f7"/></g></svg>';
+  preview.append(dot);
+  visible.forEach((id, index) => {
+    const name = byId.get(id);
+    const row = document.createElement('div');
+    row.className = 'custom-row';
+    const text = document.createElement('div');
+    text.className = 'custom-copy';
+    const label = document.createElement('strong');
+    label.textContent = name;
+    const detail = document.createElement('small');
+    detail.textContent = `Toolbar button ${index + 1} of ${TOOLBAR_LIMIT}`;
+    text.append(label, detail);
+    const controls = document.createElement('div');
+    controls.className = 'row-buttons';
+    const moveToolbar = direction => {
+      const next = index + direction;
+      if (next < 0 || next >= settings.toolbarActions.length) return;
+      [settings.toolbarActions[index], settings.toolbarActions[next]] =
+        [settings.toolbarActions[next], settings.toolbarActions[index]];
+      queueSave();
+      renderToolbarActions();
+    };
+    controls.append(
+      rowButton('↑', () => moveToolbar(-1), false, `Move ${name} up`),
+      rowButton('↓', () => moveToolbar(1), false, `Move ${name} down`),
+      rowButton('Remove', () => {
+        settings.toolbarActions = settings.toolbarActions.filter(item => item !== id);
+        if (!settings.toolbarActions.length)
+          settings.toolbarActions = normalizeToolbarActions([], settings.customActions);
+        queueSave();
+        renderToolbarActions();
+      }, true),
+    );
+    row.append(text, controls);
+    root.append(row);
+    const pill = document.createElement('span');
+    pill.className = 'tp-item';
+    pill.title = name;
+    const glyph = document.createElement('span');
+    glyph.className = 'tp-glyph';
+    glyph.innerHTML = toolbarIcon(TOOLBAR_BUILTINS.some(item => item.id === id) ? id : 'custom');
+    const caption = document.createElement('span');
+    caption.textContent = id === 'prompt' ? 'Run Prompt' : name;
+    pill.append(glyph, caption);
+    preview.append(pill);
+  });
+  const more = document.createElement('span');
+  more.className = 'tp-item tp-more';
+  more.title = 'More actions';
+  more.innerHTML = toolbarIcon('more');
+  more.setAttribute('aria-label', 'More actions');
+  preview.append(more);
+  const full = settings.toolbarActions.length >= TOOLBAR_LIMIT;
+  $('#toolbar-add-row').hidden = full;
+  $('#toolbar-limit').hidden = !full;
+  if (!full) {
+    const select = $('#toolbar-add');
+    select.replaceChildren();
+    for (const item of candidates.filter(item => !settings.toolbarActions.includes(item.id)))
+      select.add(new Option(item.name, item.id));
+  }
 }
 
 function renderActions() {

@@ -55,7 +55,7 @@ Install directly from the [**Chrome Web Store**](https://chromewebstore.google.c
 
 1. **Select any text** on a webpage or inside an editable field (`<input>`, `<textarea>`, contenteditable).
 2. **Choose an action** from:
-   - The floating toolbar beside the selection (Ask, Correct, Rewrite, and More)
+   - The floating toolbar beside the selection (up to four configurable quick actions, plus More)
    - Right-click context menu (**Plyph → Action**)
    - Toolbar popup icon
    - Keyboard shortcuts (`Alt+Shift+C` to correct, `Alt+Shift+R` to rewrite)
