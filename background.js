@@ -423,6 +423,14 @@ async function runOnTab(tabId, actionRequest, fallbackText = "") {
     type: settings.previewResults ? "SHOW_RESULT" : "REPLACE_RESULT",
     output,
     label,
+
+    ...(settings.previewResults
+      ? {
+          original:
+            action.mode !== "prompt" && action.inputMode === "transform" ? text : null,
+          showChanges: settings.previewShowChanges === true,
+        }
+      : {}),
   });
 }
 
@@ -553,10 +561,10 @@ function expandPrompt(prompt, text, variables) {
 function cleanOutput(text, inputMode) {
   let output = text.trim();
   if (inputMode === "prompt") return output;
+
   const tagged = output.match(/^<text>\s*([\s\S]*?)\s*<\/text>$/i);
   if (tagged) output = tagged[1].trim();
-  const fenced = output.match(/^```(?:text)?\s*\n?([\s\S]*?)\n?```$/i);
-  return fenced ? fenced[1].trim() : output;
+  return output;
 }
 
 async function requestJson(url, headers, body, provider, model) {

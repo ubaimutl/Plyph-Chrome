@@ -433,7 +433,7 @@
           }
           if (!extensionAlive) return;
           actionRunning = false;
-          if (!response?.ok) showToast(response?.error || 'Could not run this action.', 'error', 4000);
+
         } catch (error) {
           actionRunning = false;
           if (isContextInvalidation(error)) disposeController();
@@ -593,7 +593,7 @@
     showToast(`${label}. Use the page’s undo command to revert.`, 'normal', 1800, completedSelection);
   }
 
-  function showResult(output) {
+  function showResult(output, original = null, showChangesDefault = false) {
     removeToast();
     clearTimeout(toastTimer);
     closeDialog();
@@ -682,7 +682,13 @@
         }
 
         .dialog.expanded {
-          width: min(860px, calc(100vw - 32px));
+          box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.5), 0 0 1px 1px var(--pp-border);
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 2px;
         }
 
         .dialog-header {
@@ -729,7 +735,7 @@
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: all 0.15s ease;
+          transition: color 0.15s ease, background-color 0.15s ease;
         }
 
         .btn-expand:hover {
@@ -783,8 +789,7 @@
 
         textarea {
           width: 100%;
-          min-height: 180px;
-          max-height: 48vh;
+          min-height: 140px;
           resize: vertical;
           border: none;
           background: transparent;
@@ -796,12 +801,44 @@
           color: var(--pp-text);
           box-sizing: border-box;
           outline: none;
-          transition: min-height 0.22s ease;
         }
 
-        .dialog.expanded textarea {
-          min-height: 380px;
+        .diff-view {
+          width: 100%;
+          min-height: 140px;
+          max-height: 48vh;
+          overflow: auto;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          font-family: inherit;
+          font-size: 14px;
+          line-height: 1.6;
+          color: var(--pp-text);
+          box-sizing: border-box;
+          outline: none;
+        }
+
+        .diff-view.nowrap {
+          white-space: pre;
+          overflow-wrap: normal;
+        }
+
+        .dialog.expanded .diff-view {
           max-height: 68vh;
+        }
+
+        .diff-added {
+          background: #19452b;
+          color: #b9f6ca;
+          text-decoration: underline;
+          border-radius: 2px;
+        }
+
+        .diff-removed {
+          background: #58252b;
+          color: #ffcdd2;
+          text-decoration: line-through;
+          border-radius: 2px;
         }
 
         textarea::-webkit-scrollbar {
@@ -830,7 +867,7 @@
           border-radius: 8px;
           border: 1px solid transparent;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: background-color 0.15s ease, transform 0.15s ease;
           line-height: 1.3;
         }
 
@@ -866,19 +903,22 @@
               <span class="header-divider">|</span>
               <span class="muted-counter count-text">0 words · 0 chars</span>
             </div>
-            <button class="btn-expand" type="button" title="Expand preview size">
-              <svg class="expand-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10 2h4v4M6 14H2v-4M14 2l-5.5 5.5M2 14l5.5-5.5"/>
-              </svg>
-            </button>
+            <div class="header-actions">
+              <button class="btn-card-action btn-changes" type="button" aria-pressed="false" hidden>Show changes</button>
+              <button class="btn-expand" type="button" title="Expand preview size">
+                <svg class="expand-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10 2h4v4M6 14H2v-4M14 2l-5.5 5.5M2 14l5.5-5.5"/>
+                </svg>
+              </button>
+            </div>
           </header>
 
           <div class="card">
             <div class="card-header">
               <button class="btn-card-action btn-wrap active" type="button" title="Toggle line wrapping">wrap</button>
-              <button class="btn-card-action btn-strip-md strip-md" type="button" title="Remove markdown formatting">remove markdown</button>
             </div>
             <textarea aria-label="Generated result" spellcheck="false"></textarea>
+            <div class="diff-view" role="region" aria-label="Changes from the original text" tabindex="0" hidden></div>
           </div>
 
           <div class="dialog-footer">
@@ -891,14 +931,64 @@
 
     document.documentElement.append(host);
     const textarea = root.querySelector('textarea');
-    textarea.value = output;
-    updateCount(root, output);
-    textarea.addEventListener('input', () => updateCount(root, textarea.value));
-
+    const diffView = root.querySelector('.diff-view');
+    const changesButton = root.querySelector('.btn-changes');
     const expandBtn = root.querySelector('.btn-expand');
     const dialog = root.querySelector('.dialog');
     const expandIcon = expandBtn?.querySelector('svg');
     let isExpanded = false;
+    let isWrapped = true;
+    let showChangesView = false;
+
+    textarea.value = output;
+    updateCount(root, output);
+
+    if (original !== null && showChangesDefault && original !== output)
+      changesButton.classList.add('active');
+
+    const refreshChanges = () => {
+      if (!changesButton) return;
+      const changed = original !== null && original !== textarea.value;
+      if (!changed) changesButton.classList.remove('active');
+      changesButton.hidden = original === null;
+      changesButton.disabled = !changed;
+      showChangesView = changed && changesButton.classList.contains('active');
+      changesButton.textContent = !changed ? 'No changes' : showChangesView ? 'Show result' : 'Show changes';
+      changesButton.title = !changed ? 'No changes from the original text'
+        : showChangesView ? 'Show the editable result' : 'Show changes from the original text';
+      changesButton.setAttribute('aria-pressed', String(showChangesView));
+      if (showChangesView) renderDiff(diffView, original, textarea.value);
+      textarea.hidden = showChangesView;
+      diffView.hidden = !showChangesView;
+    };
+
+    changesButton?.addEventListener('click', () => {
+      changesButton.classList.toggle('active');
+      refreshChanges();
+      fitDialog();
+      if (showChangesView) diffView.focus({preventScroll: true});
+      else textarea.focus({preventScroll: true});
+    });
+
+    const fitDialog = () => {
+      const longest = textarea.value.split('\n').reduce((max, line) => Math.max(max, line.length), 0);
+      const available = Math.max(320, window.innerWidth - 32);
+      const width = Math.min(available, isExpanded
+        ? Math.min(860, available)
+        : Math.max(540, Math.min(680, Math.round(longest * 8.2 + 48))));
+      dialog.style.width = `${width}px`;
+      if (showChangesView) return;
+      const cap = isExpanded ? window.innerHeight * 0.68 : window.innerHeight * 0.48;
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.max(140, Math.min(cap, textarea.scrollHeight))}px`;
+    };
+
+    textarea.addEventListener('input', () => {
+      updateCount(root, textarea.value);
+      refreshChanges();
+      fitDialog();
+    });
+
     expandBtn?.addEventListener('click', () => {
       isExpanded = !isExpanded;
       dialog?.classList.toggle('expanded', isExpanded);
@@ -908,33 +998,18 @@
           ? '<path d="M14 6h-4V2M2 10h4v4M10 6l5-5M6 10l-5 5"/>'
           : '<path d="M10 2h4v4M6 14H2v-4M14 2l-5.5 5.5M2 14l5.5-5.5"/>';
       }
+      fitDialog();
     });
 
     const wrapBtn = root.querySelector('.btn-wrap');
-    let isWrapped = true;
     wrapBtn?.addEventListener('click', () => {
       isWrapped = !isWrapped;
       textarea.wrap = isWrapped ? 'soft' : 'off';
+      diffView.classList.toggle('nowrap', !isWrapped);
       wrapBtn.classList.toggle('active', isWrapped);
       wrapBtn.title = isWrapped ? 'Disable line wrapping' : 'Enable line wrapping';
+      fitDialog();
     });
-
-    const stripButton = root.querySelector('.strip-md');
-    if (stripButton) {
-      stripButton.addEventListener('click', () => {
-        const cleaned = stripMarkdown(textarea.value);
-        if (cleaned !== textarea.value) {
-          textarea.value = cleaned;
-          updateCount(root, cleaned);
-          stripButton.classList.add('active');
-          stripButton.textContent = 'removed markdown';
-          setTimeout(() => {
-            stripButton.classList.remove('active');
-            stripButton.textContent = 'remove markdown';
-          }, 1500);
-        }
-      });
-    }
 
     root.querySelector('.cancel')?.addEventListener('click', closeDialog);
 
@@ -970,7 +1045,10 @@
       if (event.key === 'Escape') closeDialog();
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') replaceSelection(textarea.value);
     });
-    textarea.focus();
+    refreshChanges();
+    fitDialog();
+    if (showChangesView) diffView.focus({preventScroll: true});
+    else textarea.focus();
   }
 
   function updateCount(root, value) {
@@ -979,6 +1057,243 @@
     if (countEl) {
       countEl.textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${value.length} chars`;
     }
+  }
+
+  function diffTokens(text) {
+    return text.match(/[\p{L}\p{N}\p{M}_]+|\s+|[^\p{L}\p{N}\p{M}_\s]/gu) ?? [];
+  }
+
+  function diffParts(original, result) {
+    const before = diffTokens(original);
+    const after = diffTokens(result);
+    let start = 0;
+    while (start < before.length && start < after.length && before[start] === after[start])
+      start++;
+    let endBefore = before.length;
+    let endAfter = after.length;
+    while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+      endBefore--;
+      endAfter--;
+    }
+    const parts = [];
+    const append = (type, text) => {
+      if (!text) return;
+      if (parts.at(-1)?.type === type)
+        parts.at(-1).text += text;
+      else
+        parts.push({type, text});
+    };
+    append('equal', before.slice(0, start).join(''));
+    const rows = endBefore - start;
+    const columns = endAfter - start;
+    if ((rows + 1) * (columns + 1) > 1000000) {
+      append('removed', before.slice(start, endBefore).join(''));
+      append('added', after.slice(start, endAfter).join(''));
+    } else {
+      const stride = columns + 1;
+      const lengths = new Uint32Array((rows + 1) * stride);
+      for (let i = rows - 1; i >= 0; i--) {
+        for (let j = columns - 1; j >= 0; j--) {
+          lengths[i * stride + j] = before[start + i] === after[start + j]
+            ? lengths[(i + 1) * stride + j + 1] + 1
+            : Math.max(lengths[(i + 1) * stride + j], lengths[i * stride + j + 1]);
+        }
+      }
+      let i = 0;
+      let j = 0;
+      while (i < rows || j < columns) {
+        if (i < rows && j < columns && before[start + i] === after[start + j]) {
+          append('equal', before[start + i++]);
+          j++;
+        } else if (i < rows && (j === columns || lengths[(i + 1) * stride + j] >= lengths[i * stride + j + 1])) {
+          append('removed', before[start + i++]);
+        } else {
+          append('added', after[start + j++]);
+        }
+      }
+    }
+    append('equal', before.slice(endBefore).join(''));
+    return parts;
+  }
+
+  function renderDiff(container, original, result) {
+    container.replaceChildren();
+    for (const {type, text} of diffParts(original, result)) {
+      if (type === 'equal') {
+        container.append(document.createTextNode(text));
+        continue;
+      }
+      const span = document.createElement('span');
+      span.className = type === 'added' ? 'diff-added' : 'diff-removed';
+      span.textContent = text;
+      container.append(span);
+    }
+  }
+
+  function showErrorDialog(message) {
+    removeToast();
+    clearTimeout(toastTimer);
+    closeDialog();
+    const host = document.createElement('div');
+    host.id = 'plyph-host';
+    const root = host.attachShadow({mode: 'open'});
+    root.innerHTML = `
+      <style>
+        :host {
+          all: initial;
+          --pp-bg: #ffffff;
+          --pp-text: #111827;
+          --pp-muted: #6b7280;
+          --pp-border: #e5e7eb;
+          --pp-btn-sec-bg: #f3f4f6;
+          --pp-btn-sec-text: #374151;
+          --pp-btn-sec-border: #e5e7eb;
+          --pp-btn-sec-hover: #e5e7eb;
+          --pp-btn-pri-bg: #1f2937;
+          --pp-btn-pri-text: #ffffff;
+          --pp-btn-pri-hover: #111827;
+        }
+        @media (prefers-color-scheme: dark) {
+          :host {
+            --pp-bg: #1d1e21;
+            --pp-text: #f3f4f6;
+            --pp-muted: #9ca3af;
+            --pp-border: rgba(255, 255, 255, 0.08);
+            --pp-btn-sec-bg: #27282c;
+            --pp-btn-sec-text: #e5e7eb;
+            --pp-btn-sec-border: rgba(255, 255, 255, 0.08);
+            --pp-btn-sec-hover: #313338;
+            --pp-btn-pri-bg: #808086;
+            --pp-btn-pri-text: #141517;
+            --pp-btn-pri-hover: #96969d;
+          }
+        }
+        .backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 2147483647;
+          background: rgba(0, 0, 0, 0.5);
+          backdrop-filter: blur(4px);
+          -webkit-backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          box-sizing: border-box;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+          color: var(--pp-text);
+        }
+        .dialog {
+          width: min(600px, calc(100vw - 40px));
+          background: var(--pp-bg);
+          border: 1px solid var(--pp-border);
+          border-radius: 14px;
+          padding: 20px 22px;
+          box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.45), 0 0 1px 1px var(--pp-border);
+          display: flex;
+          flex-direction: column;
+          box-sizing: border-box;
+        }
+        h2 {
+          margin: 0 0 12px;
+          font-size: 15px;
+          font-weight: 600;
+          letter-spacing: -0.01em;
+          color: var(--pp-text);
+        }
+        .error-body {
+          max-height: min(320px, 50vh);
+          overflow-y: auto;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          user-select: text;
+          padding: 12px 14px;
+          border: 1px solid var(--pp-border);
+          border-radius: 10px;
+          background: rgba(128, 128, 128, 0.08);
+          font-size: 13.5px;
+          line-height: 1.55;
+          color: var(--pp-text);
+          box-sizing: border-box;
+        }
+        .dialog-footer {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          margin-top: 16px;
+        }
+        .btn {
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 500;
+          padding: 7px 16px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          cursor: pointer;
+          line-height: 1.3;
+        }
+        .btn:focus-visible { outline: 2px solid var(--pp-muted); outline-offset: 2px; }
+        .btn-secondary {
+          background: var(--pp-btn-sec-bg);
+          color: var(--pp-btn-sec-text);
+          border-color: var(--pp-btn-sec-border);
+        }
+        .btn-secondary:hover { background: var(--pp-btn-sec-hover); }
+        .btn-primary {
+          background: var(--pp-btn-pri-bg);
+          color: var(--pp-btn-pri-text);
+          font-weight: 600;
+        }
+        .btn-primary:hover { background: var(--pp-btn-pri-hover); }
+      </style>
+      <div class="backdrop" role="presentation">
+        <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="pp-error-title">
+          <h2 id="pp-error-title">Plyph couldn’t complete the action</h2>
+          <div class="error-body" tabindex="0"></div>
+          <div class="dialog-footer">
+            <button class="btn btn-secondary copy" type="button">Copy error</button>
+            <button class="btn btn-primary close" type="button">Close</button>
+          </div>
+        </section>
+      </div>`;
+    root.querySelector('.error-body').textContent = message || 'Unknown error.';
+    document.documentElement.append(host);
+    root.querySelector('.close').addEventListener('click', closeDialog);
+    root.querySelector('.copy').addEventListener('click', () => {
+      copyText(message || '')
+        .then(() => showToast('Copied'))
+        .catch(() => showToast('Could not copy the error.', 'error', 3000));
+    });
+    let backdropMouseDownTarget = null;
+    const backdrop = root.querySelector('.backdrop');
+    backdrop?.addEventListener('mousedown', event => { backdropMouseDownTarget = event.target; });
+    backdrop?.addEventListener('click', event => {
+      if (event.target === backdrop && backdropMouseDownTarget === backdrop) closeDialog();
+      backdropMouseDownTarget = null;
+    });
+    root.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeDialog();
+    });
+    root.querySelector('.close').focus();
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {  }
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.append(area);
+    area.focus();
+    area.select();
+    const copied = document.execCommand('copy');
+    area.remove();
+    if (!copied) throw new Error('Could not copy.');
   }
 
   async function copyResult(textarea) {
@@ -1068,36 +1383,4 @@
     document.getElementById('plyph-toast')?.remove();
   }
 
-  function stripMarkdown(text) {
-    let output = String(text || '');
-    if (!output) return '';
-
-    output = output.replace(/^```[a-z0-9_-]*\s*\n?([\s\S]*?)\n?```$/gm, '$1');
-
-    output = output.replace(/`([^`\n]+)`/g, '$1');
-
-    output = output.replace(/\[([^\]\n]+)\]\((?:https?:\/\/[^\s\)]+|#[^\s\)]+)\)/g, '$1');
-
-    output = output.replace(/!\[([^\]\n]*)\]\([^\s\)]+\)/g, '$1');
-
-    output = output.replace(/^(?:#{1,6})\s+(.+)$/gm, '$1');
-
-    output = output.replace(/^>\s+(.+)$/gm, '$1');
-
-    output = output.replace(/^\|(?:\s*:?-+:?\s*\|)+\s*$/gm, '');
-
-    output = output.replace(/^\|\s*(.+?)\s*\|$/gm, (_m, row) => {
-      return row.split('|').map(c => c.trim()).filter(Boolean).join('   ');
-    });
-
-    output = output.replace(/(?<=^|\s)\*\*([^*\n]+?)\*\*(?=\s|[.,!?;:)]|$)/g, '$1');
-    output = output.replace(/(?<=^|\s)__([^_\n]+?)__(?=\s|[.,!?;:)]|$)/g, '$1');
-
-    output = output.replace(/(?<=^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:)]|$)/g, '$1');
-    output = output.replace(/(?<=^|\s)_([^_\n]+?)_(?=\s|[.,!?;:)]|$)/g, '$1');
-
-    output = output.replace(/(?<=^|\s)~~([^~\n]+?)~~(?=\s|[.,!?;:)]|$)/g, '$1');
-
-    return output.trim();
-  }
 })();

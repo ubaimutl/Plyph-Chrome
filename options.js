@@ -25,6 +25,7 @@ for (const select of [$('#provider'), $('#run-provider'), $('#action-provider')]
 
 $('#provider').value = settings.provider;
 $('#preview').checked = settings.previewResults;
+$('#preview-changes').checked = settings.previewShowChanges === true;
 $('#selection-trigger').checked = settings.selectionTrigger;
 $('#history-enabled').checked = settings.historyEnabled;
 $('#history-limit').value = settings.historyLimit || '';
@@ -59,7 +60,13 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
 }));
 
 $('#provider').addEventListener('change', () => { settings.provider = $('#provider').value; renderProviderFields(); queueSave(); });
-$('#preview').addEventListener('change', () => { settings.previewResults = $('#preview').checked; queueSave(); });
+$('#preview').addEventListener('change', () => {
+  settings.previewResults = $('#preview').checked;
+  $('#preview-changes').disabled = !settings.previewResults;
+  queueSave();
+});
+$('#preview-changes').disabled = !settings.previewResults;
+$('#preview-changes').addEventListener('change', () => { settings.previewShowChanges = $('#preview-changes').checked; queueSave(); });
 $('#selection-trigger').addEventListener('change', () => { settings.selectionTrigger = $('#selection-trigger').checked; queueSave(); });
 $('#vault-enabled').addEventListener('change', handleVaultToggle);
 $('#vault-enable').addEventListener('click', enableVault);

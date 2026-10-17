@@ -311,36 +311,3 @@ export function resolveOutputFormat(action, text, effectivePrompt = '') {
 
   return 'text';
 }
-
-export function stripMarkdown(text) {
-  let output = String(text || '');
-  if (!output) return '';
-
-  output = output.replace(/^```[a-z0-9_-]*\s*\n?([\s\S]*?)\n?```$/gm, '$1');
-
-  output = output.replace(/`([^`\n]+)`/g, '$1');
-
-  output = output.replace(/\[([^\]\n]+)\]\((?:https?:\/\/[^\s\)]+|#[^\s\)]+)\)/g, '$1');
-
-  output = output.replace(/!\[([^\]\n]*)\]\([^\s\)]+\)/g, '$1');
-
-  output = output.replace(/^(?:#{1,6})\s+(.+)$/gm, '$1');
-
-  output = output.replace(/^>\s+(.+)$/gm, '$1');
-
-  output = output.replace(/^\|(?:\s*:?-+:?\s*\|)+\s*$/gm, '');
-
-  output = output.replace(/^\|\s*(.+?)\s*\|$/gm, (_m, row) => {
-    return row.split('|').map(c => c.trim()).filter(Boolean).join('   ');
-  });
-
-  output = output.replace(/(?<=^|\s)\*\*([^*\n]+?)\*\*(?=\s|[.,!?;:)]|$)/g, '$1');
-  output = output.replace(/(?<=^|\s)__([^_\n]+?)__(?=\s|[.,!?;:)]|$)/g, '$1');
-
-  output = output.replace(/(?<=^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:)]|$)/g, '$1');
-  output = output.replace(/(?<=^|\s)_([^_\n]+?)_(?=\s|[.,!?;:)]|$)/g, '$1');
-
-  output = output.replace(/(?<=^|\s)~~([^~\n]+?)~~(?=\s|[.,!?;:)]|$)/g, '$1');
-
-  return output.trim();
-}
