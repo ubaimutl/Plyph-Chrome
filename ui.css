@@ -6,9 +6,8 @@
     --surface-active: #eaeaea;
     --text: #171717;
     --muted: #737373;
-    --border: #eaeaea;
+    --border: #e0e0e0;
     --border-strong: #d4d4d4;
-    --popup-border: #000000;
     --accent: #171717;
     --accent-hover: #404040;
     --on-accent: #fafafa;
@@ -37,7 +36,6 @@
         --muted: #a1a1a1;
         --border: #262626;
         --border-strong: #444444;
-        --popup-border: #ffffff;
         --accent: #ededed;
         --accent-hover: #ffffff;
         --on-accent: #000000;
@@ -89,11 +87,13 @@ h2 {
     background: var(--surface);
     font-size: 13.5px;
     box-sizing: border-box;
+    border-radius: 12px;
+    overflow: hidden;
 }
 
 .popup-menu {
     padding: 5px 5px 6px 5px;
-    border: 2px solid var(--popup-border);
+    border: 0;
     box-sizing: border-box;
 }
 
@@ -884,6 +884,20 @@ dialog::backdrop {
 }
 dialog form {
     padding: 21px;
+}
+#chatgpt-welcome {
+    width: min(440px, calc(100% - 36px));
+    padding: 24px;
+}
+#chatgpt-welcome h2 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+}
+#chatgpt-welcome p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
 }
 .dialog-header,
 .dialog-buttons {

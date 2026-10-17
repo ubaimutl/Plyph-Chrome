@@ -19,6 +19,8 @@
   let actionRunning = false;
   let dismissedSelection = null;
   let selectingPointer = false;
+  let selectionGesture = 0;
+  const fieldSelectMark = new WeakMap();
 
   globalThis.__plyphController = {dispose: disposeController};
   delete globalThis.__plyphLoaded;
@@ -68,8 +70,15 @@
   document.addEventListener('selectionchange', event => {
     if (document.getElementById('plyph-host')) return;
     dismissedSelection = null;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && isTextField(active)) fieldSelectMark.set(active, selectionGesture);
     scheduleTriggerUpdate(event);
   }, {signal: lifecycle.signal});
+  document.addEventListener('pointerdown', noteSelectionGesture, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('keydown', noteSelectionGesture, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('select', event => {
+    if (event.target instanceof HTMLElement) fieldSelectMark.set(event.target, selectionGesture);
+  }, {capture: true, signal: lifecycle.signal});
   document.addEventListener('pointerup', event => { selectingPointer = false; scheduleTriggerUpdate(event); }, {signal: lifecycle.signal});
   document.addEventListener('pointercancel', () => { selectingPointer = false; removeTrigger(true); }, {signal: lifecycle.signal});
   document.addEventListener('keyup', scheduleTriggerUpdate, {signal: lifecycle.signal});
@@ -107,7 +116,10 @@
     if (['SHOW_ERROR', 'SHOW_RESULT', 'REPLACE_RESULT'].includes(message.type)) actionRunning = false;
     if (message.type === 'SHOW_ERROR') showErrorDialog(message.message);
     if (message.type === 'SHOW_RESULT') showResult(message.output, message.original, message.showChanges);
-    if (message.type === 'REPLACE_RESULT') replaceSelection(message.output, message.label);
+    if (message.type === 'REPLACE_RESULT') {
+      if (snapshot?.kind === 'multi' || (snapshot?.kind === 'range' && !snapshot.range)) showResult(message.output, message.original, message.showChanges);
+      else replaceSelection(message.output, message.label);
+    }
     if (message.type === 'SET_PAGE_CONFIG') {
       applyPageConfig(message);
       triggerEnabled = message.selectionTrigger !== false;
@@ -122,7 +134,136 @@
     if (isContextInvalidation(error)) disposeController();
   }
 
+  function noteSelectionGesture(event) {
+    try {
+      if (event.composedPath().some(node => node?.id === 'plyph-trigger' || node?.id === 'plyph-host')) return;
+    } catch { }
+    selectionGesture++;
+  }
+
+  function isTextField(el) {
+    if (el instanceof HTMLTextAreaElement) return true;
+    if (el instanceof HTMLInputElement) return /^(text|search|url|tel|email|password)?$/i.test(el.type || '');
+    return false;
+  }
+
+  function isVisibleField(el) {
+    if (!isTextField(el)) return false;
+    if (el.disabled) return false;
+    if (el.closest('#plyph-trigger,#plyph-host')) return false;
+    let style = null;
+    try { style = getComputedStyle(el); } catch { return false; }
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    let rect = null;
+    try { rect = el.getBoundingClientRect(); } catch { return false; }
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    if (rect.right < -2000 || rect.bottom < -2000) return false;
+    return true;
+  }
+
+  function fieldSlice(el) {
+    try {
+      const start = el.selectionStart ?? 0;
+      const end = el.selectionEnd ?? start;
+      if (end <= start) return '';
+      return el.value.slice(start, end);
+    } catch { return ''; }
+  }
+
+  function elementOrder() {
+    const order = new Map();
+    let index = 0;
+    try {
+      const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT);
+      let node = walker.currentNode;
+      while (node) { order.set(node, index++); node = walker.nextNode(); }
+    } catch { }
+    return order;
+  }
+
+  function collectShadowTexts(scope, order, hostOrder, out) {
+    let els = null;
+    try { els = scope.querySelectorAll('*'); } catch { return; }
+    for (const el of els) {
+      if (!el.shadowRoot) continue;
+      if (el.id === 'plyph-trigger' || el.id === 'plyph-host') continue;
+      let text = '';
+      try { text = el.shadowRoot.getSelection()?.toString() || ''; } catch { }
+      const currentOrder = order.get(el) ?? hostOrder;
+      if (text && text.trim()) {
+        let rect = null;
+        try { rect = el.getBoundingClientRect(); } catch { }
+        out.push({order: currentOrder, text, rect});
+      }
+      collectShadowTexts(el.shadowRoot, order, currentOrder, out);
+    }
+  }
+
+  function aggregateSelection() {
+    const selection = window.getSelection();
+    const hasRange = !!(selection?.rangeCount && !selection.isCollapsed);
+    const rangeText = hasRange ? selection.toString() : '';
+    const anchorEl = hasRange
+      ? (selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement)
+      : null;
+    const focusEl = hasRange
+      ? (selection.focusNode instanceof Element ? selection.focusNode : selection.focusNode?.parentElement)
+      : null;
+    const anchorField = anchorEl?.closest?.('textarea,input') || null;
+    const anchorInField = !!(anchorField && isTextField(anchorField));
+    const order = elementOrder();
+    const parts = [];
+    if (rangeText && rangeText.trim() && !anchorInField) {
+      parts.push({order: order.get(anchorEl) ?? -1, text: rangeText, range: selection.getRangeAt(0).cloneRange()});
+    }
+    try {
+      const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT);
+      let node = walker.currentNode;
+      while (node) {
+        if (isVisibleField(node)) {
+          const text = fieldSlice(node);
+          if (text && text.trim()) {
+            const isAnchor = anchorInField && node === anchorField;
+            const fresh = fieldSelectMark.get(node) === selectionGesture;
+            if (isAnchor) {
+              parts.push({order: order.get(node) ?? -1, text, element: node, start: node.selectionStart ?? 0, end: node.selectionEnd ?? 0});
+            } else if (fresh && (!rangeText || (focusEl && node.contains(focusEl)))) {
+              parts.push({order: order.get(node) ?? -1, text, element: node, start: node.selectionStart ?? 0, end: node.selectionEnd ?? 0});
+            }
+          }
+        }
+        node = walker.nextNode();
+      }
+    } catch { }
+    if (parts.length) {
+      const shadowParts = [];
+      collectShadowTexts(document, order, -1, shadowParts);
+      for (const part of shadowParts) parts.push(part);
+    }
+    const usable = parts.filter(part => part.text && part.text.trim());
+    if (!usable.length) return null;
+    usable.sort((a, b) => a.order - b.order);
+    if (usable.length === 1 && usable[0].range) {
+      return {kind: 'range', range: usable[0].range, text: usable[0].text};
+    }
+    if (usable.length === 1 && usable[0].element) {
+      return {kind: 'control', element: usable[0].element, start: usable[0].start, end: usable[0].end, text: usable[0].text};
+    }
+    if (usable.length === 1) {
+      return {kind: 'range', range: null, rect: usable[0].rect || null, text: usable[0].text};
+    }
+    return {kind: 'multi', fragments: usable, text: usable.map(part => part.text).join('\n')};
+  }
+
   function captureSelection() {
+    try {
+      const aggregated = aggregateSelection();
+      if (aggregated?.text?.trim()) return aggregated;
+    } catch { }
+    return legacyCaptureSelection();
+  }
+
+  function legacyCaptureSelection() {
     const active = document.activeElement;
     if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && /^(text|search|url|tel|email|password)$/i.test(active.type))) {
       const start = active.selectionStart ?? 0;
@@ -157,31 +298,57 @@
     showTrigger(rect);
   }
 
+  function domRect(rect) {
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  function rangeRect(range) {
+    const rects = range.getClientRects();
+    if (rects.length > 0) {
+      const last = rects[rects.length - 1];
+      if (last && (last.width || last.height)) return domRect(last);
+    }
+    return domRect(range.getBoundingClientRect());
+  }
+
+  function unionRect(box, rect) {
+    if (!rect) return box;
+    if (!box) return domRect(rect);
+    return {
+      left: Math.min(box.left, rect.left),
+      right: Math.max(box.right, rect.right),
+      top: Math.min(box.top, rect.top),
+      bottom: Math.max(box.bottom, rect.bottom),
+      width: Math.max(box.right, rect.right) - Math.min(box.left, rect.left),
+      height: Math.max(box.bottom, rect.bottom) - Math.min(box.top, rect.top),
+    };
+  }
+
   function selectionRect(selection) {
-    if (selection.kind === 'range') {
-      const rects = selection.range.getClientRects();
-      if (rects.length > 0) {
-        const last = rects[rects.length - 1];
-        if (last && (last.width || last.height)) {
-          return {
-            left: last.left,
-            right: last.right,
-            top: last.top,
-            bottom: last.bottom,
-            width: last.width,
-            height: last.height,
-          };
-        }
+    if (selection.kind === 'multi') {
+      let box = null;
+      for (const fragment of selection.fragments || []) {
+        try {
+          if (fragment.range) box = unionRect(box, rangeRect(fragment.range));
+          else if (fragment.element) box = unionRect(box, controlCaretRect(fragment.element, fragment.end));
+          else if (fragment.rect) box = unionRect(box, fragment.rect);
+        } catch { }
       }
-      const rect = selection.range.getBoundingClientRect();
-      return {
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        bottom: rect.bottom,
-        width: rect.width,
-        height: rect.height,
-      };
+      return box;
+    }
+    if (selection.kind === 'range') {
+      if (selection.range) {
+        try { return rangeRect(selection.range); } catch { }
+      }
+      if (selection.rect) return domRect(selection.rect);
+      return null;
     }
     return controlCaretRect(selection.element, selection.end);
   }
@@ -477,6 +644,8 @@
   function sameSelection(a, b) {
     if (!a || !b || a.kind !== b.kind || a.text !== b.text) return false;
     if (a.kind === 'control') return a.element === b.element && a.start === b.start && a.end === b.end;
+    if (a.kind === 'multi') return true;
+    if (!a.range || !b.range) return true;
     return a.range.startContainer === b.range.startContainer && a.range.startOffset === b.range.startOffset &&
       a.range.endContainer === b.range.endContainer && a.range.endOffset === b.range.endOffset;
   }
