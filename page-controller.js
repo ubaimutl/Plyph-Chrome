@@ -106,6 +106,11 @@
   function handleRuntimeMessage(message, _sender, sendResponse) {
     if (message.type === 'PING') { sendResponse({ok: true}); return; }
     if (message.type === 'CAPTURE_SELECTION') {
+      if (passwordFieldFocused()) {
+        snapshot = null;
+        sendResponse({text: '', blocked: true});
+        return;
+      }
       const current = captureSelection();
       if (current?.text) snapshot = current;
       const editor = findEditorTarget(snapshot);
@@ -143,9 +148,15 @@
     selectionGesture++;
   }
 
+  function passwordFieldFocused() {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active instanceof HTMLInputElement && active.type === 'password';
+  }
+
   function isTextField(el) {
     if (el instanceof HTMLTextAreaElement) return true;
-    if (el instanceof HTMLInputElement) return /^(text|search|url|tel|email|password)?$/i.test(el.type || '');
+    if (el instanceof HTMLInputElement) return /^(text|search|url|tel|email)?$/i.test(el.type || '');
     return false;
   }
 
@@ -296,6 +307,7 @@
   }
 
   function captureSelection() {
+    if (passwordFieldFocused()) { snapshot = null; return null; }
     try {
       const aggregated = aggregateSelection();
       if (aggregated?.text?.trim()) return aggregated;
@@ -305,7 +317,7 @@
 
   function legacyCaptureSelection() {
     const active = document.activeElement;
-    if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && /^(text|search|url|tel|email|password)$/i.test(active.type))) {
+    if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && /^(text|search|url|tel|email)$/i.test(active.type))) {
       const start = active.selectionStart ?? 0;
       const end = active.selectionEnd ?? start;
       return {kind: 'control', element: active, start, end, text: active.value.slice(start, end)};

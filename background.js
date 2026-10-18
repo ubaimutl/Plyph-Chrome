@@ -391,6 +391,7 @@ async function runOnTab(tabId, actionRequest, fallbackText = "") {
   const capture = actionRequest?.mode === "ask" && instruction && fallbackText
     ? {text: fallbackText}
     : await chrome.tabs.sendMessage(tabId, {type: "CAPTURE_SELECTION"});
+  if (capture?.blocked) throw new Error("Plyph does not process password fields.");
   const text = capture?.text || fallbackText;
   if (!text?.trim()) throw new Error("Select text first.");
   if (actionRequest?.mode === "ask" && !instruction) {

@@ -1,6 +1,6 @@
 # Privacy Policy for Plyph
 
-_Last updated: August 29, 2026_
+_Last updated: October 18, 2026_
 
 Plyph is a Chrome extension that lets users process selected text using an AI provider of their choice.
 
@@ -95,6 +95,10 @@ Mouse position information is not stored, transmitted, used for analytics, or us
 Plyph does not collect or store your browsing history.
 
 The extension does not maintain a record of websites you visit, page URLs, or page titles for tracking purposes.
+
+## Limited Use
+
+Plyph’s use and transfer of user data complies with the Chrome Web Store User Data Policy, including its Limited Use requirements.
 
 ## Data Sharing
 
