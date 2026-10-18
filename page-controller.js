@@ -108,6 +108,8 @@
     if (message.type === 'CAPTURE_SELECTION') {
       const current = captureSelection();
       if (current?.text) snapshot = current;
+      const editor = findEditorTarget(snapshot);
+      if (editor) snapshot = {kind: 'editor', text: editor.text, replace: editor.replace};
       sendResponse({text: snapshot?.text || ''});
       return;
     }
@@ -117,7 +119,7 @@
     if (message.type === 'SHOW_ERROR') showErrorDialog(message.message);
     if (message.type === 'SHOW_RESULT') showResult(message.output, message.original, message.showChanges);
     if (message.type === 'REPLACE_RESULT') {
-      if (snapshot?.kind === 'multi' || (snapshot?.kind === 'range' && !snapshot.range)) showResult(message.output, message.original, message.showChanges);
+      if (snapshot?.kind === 'editor' || snapshot?.kind === 'multi' || (snapshot?.kind === 'range' && !snapshot.range)) showResult(message.output, message.original, message.showChanges);
       else replaceSelection(message.output, message.label);
     }
     if (message.type === 'SET_PAGE_CONFIG') {
@@ -253,6 +255,44 @@
       return {kind: 'range', range: null, rect: usable[0].rect || null, text: usable[0].text};
     }
     return {kind: 'multi', fragments: usable, text: usable.map(part => part.text).join('\n')};
+  }
+
+  function bridgeRequest(payload) {
+    let response = null;
+    const onResponse = event => { response = event.detail; };
+    document.addEventListener('plyph:editor-response', onResponse);
+    try {
+      document.dispatchEvent(new CustomEvent('plyph:editor-request', {detail: payload}));
+    } catch { }
+    document.removeEventListener('plyph:editor-response', onResponse);
+    return response;
+  }
+
+  function snapshotInEditor(snap) {
+    try {
+      if (snap?.kind === 'control' && snap.element?.closest?.('.ace_editor,.CodeMirror,.monaco-editor')) return true;
+      if (snap?.kind === 'range' && snap.range) {
+        const at = node => node instanceof Element ? node : node?.parentElement;
+        const start = at(snap.range.startContainer), end = at(snap.range.endContainer);
+        if (start?.closest?.('.ace_editor,.CodeMirror,.monaco-editor')) return true;
+        if (end?.closest?.('.ace_editor,.CodeMirror,.monaco-editor')) return true;
+      }
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.closest('.ace_editor,.CodeMirror,.monaco-editor')) return true;
+    } catch { }
+    return false;
+  }
+
+  function findEditorTarget(snap) {
+    try {
+      if (!snapshotInEditor(snap)) return null;
+      const response = bridgeRequest({op: 'read'});
+      const texts = response?.ok && Array.isArray(response.texts)
+        ? response.texts.filter(text => typeof text === 'string' && text.trim())
+        : [];
+      if (!texts.length) return null;
+      return {text: texts.join('\n'), replace: value => bridgeRequest({op: 'replace', text: value})?.ok === true};
+    } catch { return null; }
   }
 
   function captureSelection() {
@@ -587,7 +627,12 @@
 
   function runPageAction(action, selectedText = snapshot?.text || '') {
     if (!extensionAlive || !hasExtensionContext()) return removeTrigger();
-    if (action.mode === 'ask' && !action.instruction) { showAsk(snapshot?.text || ''); return; }
+    const editor = findEditorTarget(snapshot);
+    if (editor) {
+      selectedText = editor.text;
+      snapshot = {kind: 'editor', text: editor.text, replace: editor.replace};
+    }
+    if (action.mode === 'ask' && !action.instruction) { showAsk(selectedText || ''); return; }
     removeTrigger(true);
     actionRunning = true;
     try {
@@ -645,6 +690,7 @@
     if (!a || !b || a.kind !== b.kind || a.text !== b.text) return false;
     if (a.kind === 'control') return a.element === b.element && a.start === b.start && a.end === b.end;
     if (a.kind === 'multi') return true;
+    if (a.kind === 'editor') return true;
     if (!a.range || !b.range) return true;
     return a.range.startContainer === b.range.startContainer && a.range.startOffset === b.range.startOffset &&
       a.range.endContainer === b.range.endContainer && a.range.endOffset === b.range.endOffset;
@@ -752,6 +798,8 @@
         snapshot.range.setStartAfter(node);
         snapshot.range.collapse(true);
       }
+    } else if (snapshot.kind === 'editor' && typeof snapshot.replace === 'function') {
+      if (!snapshot.replace(text)) { showToast('The original field is no longer available.', 'error', 3500); return; }
     } else {
       showToast('The original field is no longer available.', 'error', 3500);
       return;
@@ -759,7 +807,7 @@
     const completedSelection = snapshot;
     snapshot = null;
     closeDialog();
-    showToast(`${label}. Use the page’s undo command to revert.`, 'normal', 1800, completedSelection);
+    showToast(`${label}. Use the page’s undo command to revert.`, 'normal', 1800, completedSelection.kind === 'editor' ? null : completedSelection);
   }
 
   function showResult(output, original = null, showChangesDefault = false) {

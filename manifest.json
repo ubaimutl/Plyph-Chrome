@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "minimum_chrome_version": "102",
+  "minimum_chrome_version": "111",
   "name": "Plyph",
   "version": "0.2.0",
   "description": "Use AI to correct, rewrite, or transform selected text in Chrome.",
@@ -46,6 +46,16 @@
         "page-controller.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "editor-bridge.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [

@@ -372,6 +372,11 @@ async function ensureContent(tabId) {
   } catch {
     await chrome.scripting.executeScript({
       target: { tabId },
+      files: ["editor-bridge.js"],
+      world: "MAIN",
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
       files: ["page-controller.js"],
     });
   }
