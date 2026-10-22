@@ -49,7 +49,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "RUN_ACTION_FROM_PAGE") {
     const tabId = sender.tab?.id;
-    handleActionRequest(tabId, message.action, message.text || "").then(
+    handleActionRequest(tabId, message.action, message.text || "", true).then(
       (response) => sendResponse(response),
     );
     return true;
@@ -356,9 +356,9 @@ async function runCommand(command) {
   }
 }
 
-async function handleActionRequest(tabId, action, fallbackText = "") {
+async function handleActionRequest(tabId, action, fallbackText = "", useSavedSelection = false) {
   try {
-    await runOnTab(tabId, action, fallbackText);
+    await runOnTab(tabId, action, fallbackText, useSavedSelection);
     return { ok: true };
   } catch (error) {
     await showError(tabId, error);
@@ -382,7 +382,7 @@ async function ensureContent(tabId) {
   }
 }
 
-async function runOnTab(tabId, actionRequest, fallbackText = "") {
+async function runOnTab(tabId, actionRequest, fallbackText = "", useSavedSelection = false) {
   if (!tabId) throw new Error("No active tab.");
   await ensureContent(tabId);
   const instruction = typeof actionRequest?.instruction === "string"
@@ -390,7 +390,7 @@ async function runOnTab(tabId, actionRequest, fallbackText = "") {
 
   const capture = actionRequest?.mode === "ask" && instruction && fallbackText
     ? {text: fallbackText}
-    : await chrome.tabs.sendMessage(tabId, {type: "CAPTURE_SELECTION"});
+    : await chrome.tabs.sendMessage(tabId, {type: "CAPTURE_SELECTION", useSavedSelection});
   if (capture?.blocked) throw new Error("Plyph does not process password fields.");
   const text = capture?.text || fallbackText;
   if (!text?.trim()) throw new Error("Select text first.");

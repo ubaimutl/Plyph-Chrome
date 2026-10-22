@@ -63,6 +63,8 @@ Install directly from the [**Chrome Web Store**](https://chromewebstore.google.c
 
 ---
 
+The floating button appears after a mouse or keyboard selection. It stays near the selected line, opens actions on click, and avoids nearby page controls. Click elsewhere, type, press Esc, or scroll to dismiss it. Select text again to bring it back. If there is no clear space beside the selection, use the right-click menu or a keyboard shortcut.
+
 ## Default Keyboard Shortcuts
 
 | Shortcut                                          | Action                          |

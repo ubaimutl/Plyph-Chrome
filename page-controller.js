@@ -20,6 +20,10 @@
   let dismissedSelection = null;
   let selectingPointer = false;
   let selectionGesture = 0;
+  let triggerIntent = false;
+  let selectionPoint = null;
+  let selectionScope = null;
+  let triggerWatch = null;
   const fieldSelectMark = new WeakMap();
 
   globalThis.__plyphController = {dispose: disposeController};
@@ -67,41 +71,88 @@
   } catch (error) {
     if (isContextInvalidation(error)) disposeController();
   }
+  function isPlyphEvent(event) {
+    return event.composedPath().some(node => node?.id === 'plyph-trigger' || node?.id === 'plyph-host');
+  }
+
+  function isSelectionKey(event) {
+    return (event.shiftKey && /^(ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Home|End|PageUp|PageDown)$/.test(event.key)) ||
+      ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a');
+  }
+
   document.addEventListener('selectionchange', event => {
     if (document.getElementById('plyph-host')) return;
-    dismissedSelection = null;
     const active = document.activeElement;
     if (active instanceof HTMLElement && isTextField(active)) fieldSelectMark.set(active, selectionGesture);
     scheduleTriggerUpdate(event);
   }, {signal: lifecycle.signal});
-  document.addEventListener('pointerdown', noteSelectionGesture, {capture: true, signal: lifecycle.signal});
-  document.addEventListener('keydown', noteSelectionGesture, {capture: true, signal: lifecycle.signal});
   document.addEventListener('select', event => {
     if (event.target instanceof HTMLElement) fieldSelectMark.set(event.target, selectionGesture);
   }, {capture: true, signal: lifecycle.signal});
-  document.addEventListener('pointerup', event => { selectingPointer = false; scheduleTriggerUpdate(event); }, {signal: lifecycle.signal});
-  document.addEventListener('pointercancel', () => { selectingPointer = false; removeTrigger(true); }, {signal: lifecycle.signal});
-  document.addEventListener('keyup', scheduleTriggerUpdate, {signal: lifecycle.signal});
+  function beginSelectionGesture(event) {
+    if (isPlyphEvent(event)) return;
+    noteSelectionGesture(event);
+    removeTrigger(true);
+    selectingPointer = event.button === 0 && event.isPrimary !== false;
+    selectionScope = event.composedPath()[0]?.getRootNode?.();
+    triggerIntent = selectingPointer;
+    selectionPoint = null;
+    if (triggerIntent) dismissedSelection = null;
+  }
+
+  function finishSelectionGesture(event) {
+    if (isPlyphEvent(event) || event.button !== 0 || !selectingPointer) return;
+    selectingPointer = false;
+    triggerIntent = true;
+    selectionPoint = {x: event.clientX, y: event.clientY};
+    scheduleTriggerUpdate(event);
+  }
+
+  // Native text selection/dragging can cancel the mouse's pointer stream.
+  // Like TWP, use mouseup for mouse selection; keep pointer events for touch/pen.
+  document.addEventListener('mousedown', beginSelectionGesture, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('mouseup', finishSelectionGesture, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'mouse') beginSelectionGesture(event);
+  }, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('pointerup', event => {
+    if (event.pointerType !== 'mouse') finishSelectionGesture(event);
+  }, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('pointercancel', event => {
+    if (event.pointerType === 'mouse') return;
+    selectingPointer = false;
+    removeTrigger(true);
+  }, {signal: lifecycle.signal});
   document.addEventListener('pointermove', event => {
     pointerPosition = {x: event.clientX, y: event.clientY};
   }, {passive: true, signal: lifecycle.signal});
-  document.addEventListener('pointerdown', event => {
-    pointerPosition = {x: event.clientX, y: event.clientY};
-    selectingPointer = event.button === 0;
-  }, {passive: true, signal: lifecycle.signal});
-  document.addEventListener('mousedown', event => {
-    const trigger = document.getElementById('plyph-trigger');
-    if (trigger && !event.composedPath().includes(trigger)) removeTrigger(true);
-  }, {capture: true, signal: lifecycle.signal});
-  window.addEventListener('scroll', () => removeTrigger(true), {capture: true, signal: lifecycle.signal});
-  window.addEventListener('resize', () => removeTrigger(true), {signal: lifecycle.signal});
-  window.addEventListener('pagehide', () => removeTrigger(), {signal: lifecycle.signal});
-
-  window.addEventListener('blur', () => { selectingPointer = false; removeTrigger(true); }, {signal: lifecycle.signal});
   document.addEventListener('keydown', event => {
-    if (event.composedPath().some(node => node?.id === 'plyph-trigger' || node?.id === 'plyph-host')) return;
+    if (isPlyphEvent(event)) return;
+    // Let Tab reach the toolbar without collapsing it.
+    if (event.key === 'Tab' && document.getElementById('plyph-trigger')) return;
+    noteSelectionGesture(event);
     removeTrigger(true);
+    triggerIntent = isSelectionKey(event);
+    selectionScope = document.activeElement?.getRootNode();
+    selectionPoint = null;
+    if (triggerIntent) dismissedSelection = null;
   }, {capture: true, signal: lifecycle.signal});
+  document.addEventListener('keyup', event => {
+    if (isSelectionKey(event)) scheduleTriggerUpdate(event);
+  }, {signal: lifecycle.signal});
+  window.addEventListener('scroll', event => {
+    const target = event.target;
+    const node = snapshot?.element || snapshot?.range?.commonAncestorContainer;
+    // Autocomplete panels and unrelated page widgets scroll independently.
+    if (target === document || target === window || (node && target?.contains?.(node))) removeTrigger(true);
+  }, {capture: true, passive: true, signal: lifecycle.signal});
+  window.addEventListener('resize', refreshTriggerPosition, {signal: lifecycle.signal});
+  window.visualViewport?.addEventListener('resize', refreshTriggerPosition, {signal: lifecycle.signal});
+  window.visualViewport?.addEventListener('scroll', () => removeTrigger(true), {signal: lifecycle.signal});
+  window.addEventListener('pagehide', () => removeTrigger(true), {signal: lifecycle.signal});
+  window.addEventListener('blur', () => { selectingPointer = false; removeTrigger(true); }, {signal: lifecycle.signal});
+  document.addEventListener('visibilitychange', () => { if (document.hidden) removeTrigger(true); }, {signal: lifecycle.signal});
+  document.addEventListener('contextmenu', () => removeTrigger(true), {capture: true, signal: lifecycle.signal});
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
     if (message.type === 'PING') { sendResponse({ok: true}); return; }
@@ -111,8 +162,10 @@
         sendResponse({text: '', blocked: true});
         return;
       }
-      const current = captureSelection();
-      if (current?.text) snapshot = current;
+      // Page actions explicitly reuse the selection captured by our toolbar.
+      // Shortcuts, context menus and the browser popup must read a fresh selection.
+      const current = message.useSavedSelection ? snapshot : captureSelection();
+      snapshot = current?.text?.trim() ? current : null;
       const editor = findEditorTarget(snapshot);
       if (editor) snapshot = {kind: 'editor', text: editor.text, replace: editor.replace};
       sendResponse({text: snapshot?.text || ''});
@@ -332,22 +385,77 @@
   function scheduleTriggerUpdate(event) {
     if (!extensionAlive || event?.composedPath().some(node => node?.id === 'plyph-trigger' || node?.id === 'plyph-host')) return;
     clearTimeout(triggerTimer);
-    triggerTimer = setTimeout(updateTrigger, 90);
+    if (!triggerIntent) return;
+    triggerTimer = setTimeout(updateTrigger, 180);
   }
 
   function updateTrigger() {
     if (!extensionAlive || !triggerEnabled || actionRunning || document.getElementById('plyph-host')) return removeTrigger();
     if (selectingPointer) return;
-    const current = captureSelection();
-    if (!current?.text?.trim()) { dismissedSelection = null; return removeTrigger(); }
+    const current = captureTriggerSelection();
+    if (!current?.text?.trim()) return removeTrigger();
     if (sameSelection(current, dismissedSelection)) return removeTrigger();
     snapshot = current;
-    const rect = selectionRect(current);
+    const rect = triggerSelectionRect(current);
     if (!rect || (!rect.width && !rect.height)) return removeTrigger();
     if (rect.bottom < -20 || rect.top > window.innerHeight + 20 || rect.right < -20 || rect.left > window.innerWidth + 20) {
       return removeTrigger();
     }
     showTrigger(rect);
+    // Showing the button completes this gesture. Other extensions can adjust
+    // focus/selection later; only a new user gesture should recapture it.
+    triggerIntent = false;
+  }
+
+  // Automatic UI follows only the active selection. Explicit commands can still
+  // aggregate multiple fields through captureSelection(). Never anchor to stale fields.
+  function captureTriggerSelection() {
+    if (passwordFieldFocused()) return null;
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    if (isTextField(active)) {
+      if (!isVisibleField(active)) return null;
+      const start = active.selectionStart ?? 0, end = active.selectionEnd ?? start;
+      return end > start ? {kind: 'control', element: active, start, end, text: active.value.slice(start, end), backwards: active.selectionDirection === 'backward'} : null;
+    }
+    const scope = active?.getRootNode();
+    const selection = selectionScope?.getSelection?.() || scope?.getSelection?.() || window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return null;
+    const range = selection.getRangeAt(0).cloneRange();
+    if (!range.startContainer.isConnected || !range.endContainer.isConnected) return null;
+    return {kind: 'range', range, text: selection.toString(),
+      backwards: selection.focusNode === range.startContainer && selection.focusOffset === range.startOffset};
+  }
+
+  function triggerSelectionRect(current) {
+    if (!current) return null;
+    if (current.kind === 'control') {
+      if (!current.element.isConnected) return null;
+      const field = current.element.getBoundingClientRect();
+      if (!field.width || !field.height) return null;
+      // Mouse selections use the release position, as TWP does. Measuring a
+      // caret with a mirror is unreliable in styled/scrolling search editors.
+      if (selectionPoint) {
+        const x = Math.max(field.left, Math.min(field.right, selectionPoint.x));
+        const y = Math.max(field.top, Math.min(field.bottom, selectionPoint.y));
+        return {left: x, right: x, top: y, bottom: y, width: 1, height: 1};
+      }
+      const position = current.backwards ? current.start : current.end;
+      let caret;
+      try { caret = controlCaretRect(current.element, position); } catch { }
+      if (!caret || caret.bottom < field.top || caret.top > field.bottom || caret.left < field.left || caret.left > field.right) return domRect(field);
+      return {...caret, top: Math.max(caret.top, field.top), bottom: Math.min(caret.bottom, field.bottom)};
+    }
+    if (!current.range?.startContainer.isConnected || !current.range.endContainer.isConnected) return null;
+    const rects = [...current.range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+    if (!rects.length) return null;
+    if (selectionPoint) {
+      const distance = rect => Math.hypot(Math.max(rect.left - selectionPoint.x, 0, selectionPoint.x - rect.right),
+        Math.max(rect.top - selectionPoint.y, 0, selectionPoint.y - rect.bottom));
+      const nearest = rects.reduce((a, b) => distance(a) <= distance(b) ? a : b);
+      return domRect(nearest);
+    }
+    return domRect(current.backwards ? rects[0] : rects[rects.length - 1]);
   }
 
   function domRect(rect) {
@@ -430,25 +538,37 @@
     for (const property of properties) {
       if (style[property]) mirror.style[property] = style[property];
     }
+    mirror.style.whiteSpace = element instanceof HTMLInputElement ? 'pre' : 'pre-wrap';
     mirror.textContent = element.value.slice(0, position);
     const marker = document.createElement('span');
-    marker.textContent = '\u200B';
+    marker.textContent = element.value.slice(position) || '\u200B';
     mirror.append(marker);
-    document.body.append(mirror);
+    const measurementHost = document.createElement('div');
+    measurementHost.style.setProperty('all', 'initial', 'important');
+    measurementHost.style.setProperty('position', 'fixed', 'important');
+    measurementHost.style.setProperty('visibility', 'hidden', 'important');
+    measurementHost.attachShadow({mode: 'closed'}).append(mirror);
+    document.documentElement.append(measurementHost);
 
     const elementRect = element.getBoundingClientRect();
     const markerLeft = marker.offsetLeft;
     const markerTop = marker.offsetTop;
     const lineHeight = Number.parseFloat(style.lineHeight) || (Number.parseFloat(style.fontSize) * 1.2) || 16;
-    mirror.remove();
+    measurementHost.remove();
 
+    const scaleX = elementRect.width / (element.offsetWidth || elementRect.width);
+    const scaleY = elementRect.height / (element.offsetHeight || elementRect.height);
+    const caretLeft = elementRect.left + (markerLeft - element.scrollLeft) * scaleX;
+    const caretTop = element instanceof HTMLInputElement
+      ? elementRect.top + (elementRect.height - lineHeight * scaleY) / 2
+      : elementRect.top + (markerTop - element.scrollTop) * scaleY;
     return {
-      left: elementRect.left + markerLeft - element.scrollLeft,
-      right: elementRect.left + markerLeft - element.scrollLeft,
-      top: elementRect.top + markerTop - element.scrollTop,
-      bottom: elementRect.top + markerTop - element.scrollTop + lineHeight,
+      left: caretLeft,
+      right: caretLeft,
+      top: caretTop,
+      bottom: caretTop + lineHeight * scaleY,
       width: 1,
-      height: lineHeight,
+      height: lineHeight * scaleY,
     };
   }
 
@@ -520,11 +640,19 @@
     if (!host) {
       host = document.createElement('div');
       host.id = 'plyph-trigger';
+      // Manual top-layer popovers escape transformed/clipped page ancestors and
+      // coexist with the site's own popovers without closing them.
+      host.style.setProperty('all', 'initial', 'important');
+      for (const [key, value] of Object.entries({margin: '0', padding: '0', border: '0', inset: 'auto',
+        width: 'max-content', height: 'auto', overflow: 'visible', background: 'transparent',
+        transform: 'none', zoom: '1', transition: 'none', animation: 'none'})) host.style.setProperty(key, value, 'important');
+      if (typeof host.showPopover === 'function') host.setAttribute('popover', 'manual');
       const root = host.attachShadow({mode: 'open'});
       root.innerHTML = `
         <style>
           :host { all: initial; color-scheme: light dark; }
-          .wrapper { display: flex; position: relative; align-items: center; gap: 2px; padding: 3px;
+          :host::backdrop { display: none; }
+          .wrapper { max-width: calc(100vw - 16px); box-sizing: border-box; display: flex; position: relative; align-items: center; gap: 2px; padding: 3px;
             border: 1px solid var(--border); border-radius: 18px; background: var(--surface);
             box-shadow: 0 3px 14px #0002; font: 12px/1.4 system-ui, sans-serif; color: var(--text); }
           .theme-light { --surface: #fff; --hover: #f0f2f5; --text: #20242b; --border: #d8dce2; --muted: #565f6c; }
@@ -536,7 +664,7 @@
           button:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
           .dot { width: 28px; padding: 5px; }
           .dot svg { display: block; width: 18px; height: 18px; }
-          .quick-actions { display: flex; align-items: center; gap: 2px; border-left: 1px solid var(--border); padding-left: 3px; }
+          .quick-actions { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 2px; border-left: 1px solid var(--border); padding-left: 3px; }
           [hidden] { display: none !important; }
           .glyph { display: flex; width: 16px; height: 16px; flex: 0 0 16px; }
           .glyph svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -559,7 +687,28 @@
         </div>`;
       renderQuickActions(root);
       document.documentElement.append(host);
+      if (host.hasAttribute('popover')) {
+        try { host.showPopover(); } catch { host.removeAttribute('popover'); }
+      }
+      triggerWatch = setInterval(() => {
+        if (!host.isConnected) return;
+        if (passwordFieldFocused()) return removeTrigger(true);
+        // Keep the captured text even if another extension moves focus or
+        // changes the live selection while showing its delayed toolbar.
+        const interacting = document.activeElement === host;
+        const anchor = triggerSelectionRect(snapshot);
+        const previous = host._plyphSelectionRect;
+        const field = snapshot?.kind === 'control' ? snapshot.element.getBoundingClientRect() : null;
+        if (field && host._plyphFieldRect && ['left', 'top', 'right', 'bottom'].some(key => Math.abs(field[key] - host._plyphFieldRect[key]) > 2)) return removeTrigger(true);
+        const textChanged = snapshot?.kind === 'control'
+          ? snapshot.element.value.slice(snapshot.start, snapshot.end) !== snapshot.text
+          : snapshot?.range?.toString() !== snapshot?.text;
+        if (textChanged || !anchor ||
+            ['left', 'top', 'right', 'bottom'].some(key => Math.abs(anchor[key] - previous[key]) > 2)) return removeTrigger(true);
+        if (!interacting) positionTrigger(host, previous);
+      }, 150);
       root.addEventListener('mousedown', event => event.preventDefault());
+      for (const type of ['pointerdown', 'pointerup', 'click']) root.addEventListener(type, event => event.stopPropagation());
       const dot = root.querySelector('.dot');
       dot.addEventListener('click', () => {
         const quick = root.querySelector('.quick-actions');
@@ -582,23 +731,112 @@
         }
       });
     }
+    host.dataset.anchor = selectionPoint ? 'pointer' : 'selection';
     host._plyphSelectionRect = rect;
+    host._plyphFieldRect = snapshot?.kind === 'control' ? domRect(snapshot.element.getBoundingClientRect()) : null;
     host.shadowRoot.querySelector('.wrapper').className = `wrapper ${isDark ? 'theme-dark' : 'theme-light'}`;
     positionTrigger(host, rect);
+  }
+
+  function refreshTriggerPosition() {
+    const host = document.getElementById('plyph-trigger');
+    if (!host) return;
+    const previous = host._plyphFieldRect;
+    const field = snapshot?.kind === 'control' ? snapshot.element.getBoundingClientRect() : null;
+    if (selectionPoint && field && previous) {
+      selectionPoint.x += field.left - previous.left;
+      selectionPoint.y += field.top - previous.top;
+    }
+    const rect = triggerSelectionRect(snapshot);
+    if (!rect) return removeTrigger(true);
+    host._plyphSelectionRect = rect;
+    host._plyphFieldRect = field ? domRect(field) : null;
+    positionTrigger(host, rect);
+  }
+
+  function popupCandidates(rect, width, height, viewport, point) {
+    const gap = 10, edge = 8;
+    const clampX = x => Math.max(viewport.left + edge, Math.min(viewport.right - width - edge, x));
+    const clampY = y => Math.max(viewport.top + edge, Math.min(viewport.bottom - height - edge, y));
+    const x = point ? Math.max(rect.left, Math.min(rect.right, point.x)) : rect.right;
+    const y = point ? Math.max(rect.top, Math.min(rect.bottom, point.y)) : rect.bottom;
+    // Prefer a small offset from the release point. Try both sides and above/
+    // below, then clamp at viewport edges instead of losing every candidate.
+    const positions = point ? [
+      {left: x + gap, top: y - height - gap},
+      {left: x + gap, top: rect.bottom + gap},
+      {left: x - width - gap, top: y - height - gap},
+      {left: x - width - gap, top: rect.bottom + gap},
+    ] : [];
+    const alignments = [rect.right, rect.right - width, rect.left];
+    for (const top of [rect.bottom + gap, rect.top - height - gap]) {
+      for (const left of alignments) positions.push({left, top});
+    }
+    return positions.map(p => ({left: clampX(p.left), top: clampY(p.top)}));
+  }
+
+  function popupObstructed(host, box) {
+    // Hit-test beneath our host, including controls inside open shadow roots.
+    const previous = host.style.getPropertyValue('pointer-events');
+    host.style.setProperty('pointer-events', 'none', 'important');
+    try {
+      const xs = [box.left + 2, box.left + box.width / 2, box.left + box.width - 2];
+      const ys = [box.top + 2, box.top + box.height / 2, box.top + box.height - 2];
+      return xs.some(x => ys.some(y => {
+        let element = document.elementFromPoint(x, y);
+        while (element?.shadowRoot?.elementFromPoint) {
+          const inner = element.shadowRoot.elementFromPoint(x, y);
+          if (!inner || inner === element) break;
+          element = inner;
+        }
+        while (element && element !== document.documentElement) {
+          if (element === host) return false;
+          const selectedNode = snapshot?.element || snapshot?.range?.commonAncestorContainer;
+          // The selected editor/dialog is the context, not a competing popup.
+          if (selectedNode && element.contains(selectedNode)) {
+            element = element.parentElement || element.getRootNode()?.host;
+            continue;
+          }
+          if (element.matches('button,a[href],input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="button"],[role="toolbar"],[role="menu"],[role="dialog"],[popover]')) return true;
+          // A z-index is not evidence of a popup: search pages and editors
+          // routinely put their entire content in positioned layers.
+          element = element.parentElement || element.getRootNode()?.host;
+        }
+        return false;
+      }));
+    } finally {
+      if (previous) host.style.setProperty('pointer-events', previous, 'important');
+      else host.style.removeProperty('pointer-events');
+    }
   }
 
   function positionTrigger(host, rect) {
     host.style.setProperty('position', 'fixed', 'important');
     host.style.setProperty('z-index', '2147483646', 'important');
-    const width = host.shadowRoot.querySelector('.wrapper').getBoundingClientRect().width;
-    const x = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right + 5));
-    const y = Math.max(8, Math.min(window.innerHeight - 50, rect.bottom + 6));
+    const wrapper = host.shadowRoot.querySelector('.wrapper');
+    const {width, height} = wrapper.getBoundingClientRect();
+    const visual = window.visualViewport;
+    const viewport = {left: visual?.offsetLeft || 0, top: visual?.offsetTop || 0,
+      right: (visual?.offsetLeft || 0) + (visual?.width || window.innerWidth),
+      bottom: (visual?.offsetTop || 0) + (visual?.height || window.innerHeight)};
+    const menu = host.shadowRoot.querySelector('.menu');
+    const menuRect = menu.hidden ? null : menu.getBoundingClientRect();
+    const footprintWidth = Math.max(width, menuRect?.width || 0);
+    const footprintHeight = height + (menuRect ? menuRect.height + 6 : 0);
+    const candidates = popupCandidates(rect, footprintWidth, footprintHeight, viewport, selectionPoint);
+    const placement = candidates.find(p => !popupObstructed(host, {...p, width: footprintWidth, height: footprintHeight}));
+    // Prefer hiding to covering controls or clamping the popup far from its text.
+    if (!placement) return removeTrigger(true);
+    const x = placement.left;
+    const above = placement.top < rect.top;
+    const y = placement.top + (above && menuRect ? menuRect.height + 6 : 0);
     host.style.setProperty('left', `${x}px`, 'important');
     host.style.setProperty('top', `${y}px`, 'important');
-    const menu = host.shadowRoot.querySelector('.menu');
+    const actual = wrapper.getBoundingClientRect();
+    if (Math.abs(actual.left - x) > 2 || Math.abs(actual.top - y) > 2) return removeTrigger(true);
     menu.style.right = 'auto';
-    menu.style.left = `${Math.min(0, window.innerWidth - x - 246)}px`;
-    menu.classList.toggle('above', y > window.innerHeight / 2);
+    menu.style.left = '0';
+    menu.classList.toggle('above', above);
   }
 
   function enabledCustomActions(actions) {
@@ -633,6 +871,9 @@
       menu.append(button);
     });
     menu.hidden = false;
+    const host = root.host;
+    positionTrigger(host, host._plyphSelectionRect);
+    if (!host.isConnected) return;
     more.setAttribute('aria-expanded', 'true');
     menu.querySelector('button')?.focus();
   }
@@ -710,7 +951,9 @@
 
   function removeTrigger(suppress = false) {
     clearTimeout(triggerTimer);
-    if (suppress) dismissedSelection = snapshot;
+    clearInterval(triggerWatch);
+    triggerWatch = null;
+    if (suppress) { dismissedSelection = snapshot; triggerIntent = false; }
     document.getElementById('plyph-trigger')?.remove();
   }
 
@@ -800,15 +1043,31 @@
       element.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: text}));
       element.dispatchEvent(new Event('change', {bubbles: true}));
     } else if (snapshot.kind === 'range') {
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(snapshot.range);
+      const range = snapshot.range;
+      // Shadow selections may have text/geometry without a usable DOM range.
+      // Reject these before touching either the live selection or page contents.
+      if (!range || !range.startContainer?.isConnected || !range.endContainer?.isConnected || range.collapsed ||
+          range.startContainer.getRootNode() !== range.endContainer.getRootNode()) {
+        showToast('The original selection is no longer available. Select the text again, or copy the result.', 'error', 3500);
+        return;
+      }
+      const scope = range.startContainer.getRootNode();
+      const selection = scope.getSelection?.() || window.getSelection();
+      if (!selection) { showToast('The original selection is no longer available.', 'error', 3500); return; }
+      try {
+        selection.removeAllRanges();
+        selection.addRange(range);
+        if (!selection.rangeCount) throw new Error('Selection could not be restored');
+      } catch {
+        showToast('The original selection could not be restored. Select the text again, or copy the result.', 'error', 3500);
+        return;
+      }
       if (!document.execCommand('insertText', false, text)) {
-        snapshot.range.deleteContents();
+        range.deleteContents();
         const node = document.createTextNode(text);
-        snapshot.range.insertNode(node);
-        snapshot.range.setStartAfter(node);
-        snapshot.range.collapse(true);
+        range.insertNode(node);
+        range.setStartAfter(node);
+        range.collapse(true);
       }
     } else if (snapshot.kind === 'editor' && typeof snapshot.replace === 'function') {
       if (!snapshot.replace(text)) { showToast('The original field is no longer available.', 'error', 3500); return; }
